@@ -1,0 +1,617 @@
+# Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+#                                 <velissariou.1@osu.edu>
+# Version: 1.2
+#
+# Version - 1.2 Mon Oct 26 2015
+# Version - 1.1 Fri Apr 24 2015
+# Version - 1.0 Sun Aug 03 2014
+
+set +u
+
+#------------------------------------------------------------
+# SOURCE THE UTILITY FUNCTIONS
+if [ -f functions_common ]; then
+  source functions_common
+else
+  echo " ### ERROR:: in functions_wps"
+  echo "     Cannot locate the file: functions_common"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+fi
+#------------------------------------------------------------
+
+WpsPrint()
+{
+  local tmp_str
+
+  local old_COLORSET
+
+
+  adjustYESNOVar PRINT_ENV
+  [ -z "${PRINT_ENV:-}" ] && return 0
+
+
+  old_COLORSET=${COLORSET:-}
+  adjustYESNOVar COLORSET
+
+  echo; titxt "VALUES OF THE SCRIPT ENVIRONMENT VARIABLES"
+
+  echo "CASEID           = ${CASEID:-UNDEF}"
+  echo "WPS_DIR          = ${WPS_DIR:-UNDEF}"
+  echo "GEOG_DIR         = ${GEOG_DIR:-UNDEF}"
+    tmp_str=${DATA_DIR[*]}
+  echo "DATA_DIR         = ${tmp_str:-UNDEF}"
+  echo "BEG_DATE         = ${BEG_DATE:-UNDEF}"
+  echo "END_DATE         = ${END_DATE:-UNDEF}"
+    tmp_str=${FILE_TYPE[*]}
+  echo "FILE_TYPE        = ${tmp_str:-UNDEF}"
+    tmp_str=${FILE_PFX[*]}
+  echo "FILE_PFX         = ${tmp_str:-UNDEF}"
+    tmp_str=${FILE_SFX[*]}
+  echo "FILE_SFX         = ${tmp_str:-UNDEF}"
+    tmp_str=${DATE_FMT[*]}
+  echo "DATE_FMT         = ${tmp_str:-UNDEF}"
+  echo "DATA_INTERVAL    = ${DATA_INTERVAL:-UNDEF}"
+    tmp_str=${VTABLE_SFX[*]}
+  echo "VTABLE_SFX       = ${tmp_str:-UNDEF}"
+    tmp_str=${VTABLE_NAME[*]}
+  echo "VTABLE_NAME      = ${tmp_str:-UNDEF}"
+  echo "EXTRA_REC_BEFORE = ${EXTRA_REC_BEFORE:-UNDEF}"
+  echo "EXTRA_REC_AFTER  = ${EXTRA_REC_AFTER:-UNDEF}"
+  echo "MODFILES         = ${MODFILES:-UNDEF}"
+  echo "USER_CPUS        = ${USER_CPUS:-UNDEF}"
+  echo "HOSTFILE         = ${HOSTFILE:-UNDEF}"
+  echo "REMOVE_DIR       = ${REMOVE_DIR:-UNDEF}"
+  echo "CLEANUP          = ${CLEANUP:-UNDEF}"
+  echo "USE_GPAR         = ${USE_GPAR:-UNDEF}"
+  echo "GPAR_JOBS        = ${GPAR_JOBS:-UNDEF}"
+  echo "GPAR_SLF         = ${GPAR_SLF:-UNDEF}"
+  echo "GPAR_OPTS_ENV    = ${GPAR_OPTS_ENV:-UNDEF}"
+  echo "GPAR_OPTS_GLB    = ${GPAR_OPTS_GLB:-UNDEF}"
+  echo "GPAR_OPTS_SSH    = ${GPAR_OPTS_SSH:-UNDEF}"
+  echo "GPAR_OPTS_TIME   = ${GPAR_OPTS_TIME:-UNDEF}"
+  echo "GPAR_OPTS_RESUME = ${GPAR_OPTS_RESUME:-UNDEF}"
+  echo "USE_SHMEM        = ${USE_SHMEM:-UNDEF}"
+
+  echo
+
+  export COLORSET=${old_COLORSET:-}
+
+  exit 0
+}
+
+WpsSettings()
+{
+  local nm_func="${FUNCNAME[0]}"
+  
+  local ival tmp_str
+
+  #----------
+  CASEID="$( echo "${CASEID:-}" | sed 's/[[:space:]]//g' )"
+  export CASEID
+
+  #----------
+  WPS_DIR="${WPS_DIR:-}"
+  WPS_DIR="$( echo "${WPS_DIR}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+  export WPS_DIR
+
+  #----------
+  GEOG_DIR="${GEOG_DIR:-/DATA-GEOG}"
+  GEOG_DIR="$( echo "${GEOG_DIR}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+  export GEOG_DIR
+
+  #----------
+  tmp_str=
+  DATA_DIR="${DATA_DIR:-Data}"
+  for ival in ${DATA_DIR}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  DATA_DIR="$( strTrim "${tmp_str:-}" 2 )"
+  export DATA_DIR
+
+  #----------
+  BEG_DATE="$( strTrim "${BEG_DATE:-}" 2 )"
+  export BEG_DATE
+
+  #----------
+  END_DATE="$( strTrim "${END_DATE:-}" 2 )"
+  export END_DATE
+
+  #----------
+  tmp_str=
+  FILE_TYPE=${FILE_TYPE:-GFS}
+  for ival in ${FILE_TYPE}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  FILE_TYPE="$( strTrim "${tmp_str:-}" 2 )"
+  export FILE_TYPE
+
+  #----------
+  tmp_str=
+  FILE_PFX=${FILE_PFX:-gfs_}
+  for ival in ${FILE_PFX}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  FILE_PFX="$( strTrim "${tmp_str:-}" 2 )"
+  export FILE_PFX
+
+  #----------
+  tmp_str=
+  FILE_SFX=${FILE_SFX:-.gr}
+  for ival in ${FILE_SFX}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  FILE_SFX="$( strTrim "${tmp_str:-}" 2 )"
+  export FILE_SFX
+
+  #----------
+  tmp_str=
+  DATE_FMT=${DATE_FMT:-YMDH}
+  for ival in ${DATE_FMT}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  DATE_FMT="$( strTrim "${tmp_str:-}" 2 )"
+  export DATE_FMT
+
+  #----------
+  DATA_INTERVAL="$( getPosInteger "${DATA_INTERVAL:-6}" )"
+  [ $? -ne 0 ] && DATA_INTERVAL=6
+  export DATA_INTERVAL
+
+  #----------
+  tmp_str=
+  VTABLE_SFX=${VTABLE_SFX:-${FILE_TYPE}}
+  for ival in ${VTABLE_SFX}
+  do
+    ival="$( echo "${ival:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+    tmp_str="${tmp_str} ${ival}"
+  done
+  VTABLE_SFX="$( strTrim "${tmp_str:-}" 2 )"
+  export VTABLE_SFX
+
+  #----------
+  EXTRA_REC_BEFORE="$( getPosInteger "${EXTRA_REC_BEFORE:-0}" )"
+  [ $? -ne 0 ] && EXTRA_REC_BEFORE=0
+  export EXTRA_REC_BEFORE
+
+  #----------
+  EXTRA_REC_AFTER="$( getPosInteger "${EXTRA_REC_AFTER:-0}" )"
+  [ $? -ne 0 ] && EXTRA_REC_AFTER=0
+  export EXTRA_REC_AFTER
+
+  #----------
+  MODFILES="$( strTrim "${MODFILES:-}" 2 )"
+  export MODFILES
+
+  #----------
+  USER_CPUS="$( getPosInteger "${USER_CPUS:-}" )"
+  [ $? -ne 0 ] && USER_CPUS=
+  export USER_CPUS
+
+  #----------
+  HOSTFILE="$( echo "${HOSTFILE:-}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+  export HOSTFILE
+
+  #----------
+  adjustYESNOVar REMOVE_DIR
+  [ -n "${REMOVE_DIR:+1}" ] && REMOVE_DIR=1
+  REMOVE_DIR=${REMOVE_DIR:-0}
+  export REMOVE_DIR
+
+  #----------
+  adjustYESNOVar CLEANUP
+  [ -n "${CLEANUP:+1}" ] && CLEANUP=1
+  CLEANUP=${CLEANUP:-0}
+  export CLEANUP
+
+  #----------
+  adjustYESNOVar USE_GPAR
+  export USE_GPAR
+
+  #----------
+  GPAR_JOBS="$( getPosInteger "${GPAR_JOBS:-4}" )"
+  [ $? -ne 0 ] && GPAR_JOBS=4
+  export GPAR_JOBS
+
+  #----------
+  GPAR_SLF=${GPAR_SLF:-..}
+  GPAR_SLF="$( echo "${GPAR_SLF}" | sed 's/[[:space:]]//g' | sed 's#/*$##' )"
+  export GPAR_SLF
+
+  #----------
+  adjustYESNOVar USE_SHMEM
+  export USE_SHMEM
+
+  return 0
+}
+
+# -------------------------------------------------------
+# getDataTypeWps()
+# Usage:      getDataTypeWps var_type [vtable_sfx]
+# Parameters: var_type = the WPS variable/data type
+# Returns:    0
+# Exports:    FILE_TYPE VTABLE_NAME
+# Echoes:     NONE
+#
+# Gets the supplied options to the script.
+# -------------------------------------------------------
+getDataTypeWps()
+{
+  local nm_func="${FUNCNAME[0]}"
+
+  local my_dtyp="${1}"
+  local my_vsfx="${2}"
+
+  local my_vtyp my_vtbl
+
+  my_vtyp="`toUPPER "${my_dtyp}"`"
+  if [ -z "${my_vtyp}" ]; then
+    procError "usage: ${nm_func} \"var_type\" [\"vtable_sfx\"]"
+  fi
+
+  my_dtyp=( ${my_dtyp} )
+  my_vtyp=( ${my_vtyp} )
+  my_vsfx=( ${my_vsfx} )
+
+  for ((ityp=0; ityp<${#my_vtyp[@]}; ityp++))
+  do
+    my_vsfx[${ityp}]="${my_vsfx[${ityp}]##*.}"
+    case "${my_vtyp[${ityp}]}" in
+      "AFWAICE")
+          my_dtyp[${ityp}]="AFWAICE"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AGRMETSNOW")
+          my_dtyp[${ityp}]="AGRMETSNOW"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AGRMETSOIL")
+          my_dtyp[${ityp}]="AGRMETSOIL"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AGRMETSOIL2")
+          my_dtyp[${ityp}]="AGRMETSOIL2"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AGRWRF")
+          my_dtyp[${ityp}]="AGRWRF"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ARW")
+          my_dtyp[${ityp}]="ARW"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ARWP")
+          my_dtyp[${ityp}]="ARWp"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AVN0P5WRF")
+          my_dtyp[${ityp}]="AVN0P5WRF"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "AWIP")
+          my_dtyp[${ityp}]="AWIP"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "CFSR2_WEB")
+          my_dtyp[${ityp}]="CFSR2_web"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "CFSR_MEAN")
+          my_dtyp[${ityp}]="CFSR_mean"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "CFSR_PRES")
+          my_dtyp[${ityp}]="CFSR_press_pgbh06"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "CFSR_SFC")
+          my_dtyp[${ityp}]="CFSR_sfc_flxf06"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ECMWF")
+          my_dtyp[${ityp}]="ECMWF"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ECMWF_SIGMA")
+          my_dtyp[${ityp}]="ECMWF_sigma"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ERA-INTERIM.ML")
+          my_dtyp[${ityp}]="ERA-interim.ml"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "ERA-INTERIM.PL")
+          my_dtyp[${ityp}]="ERA-interim.pl"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GFDL")
+          my_dtyp[${ityp}]="GFDL"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GFS")
+          my_dtyp[${ityp}]="GFS"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GFSTROP")
+          my_dtyp[${ityp}]="GFS+TROP"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GFSENS")
+          my_dtyp[${ityp}]="GFSENS"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GGODAS")
+          my_dtyp[${ityp}]="GODAS"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "GSM")
+          my_dtyp[${ityp}]="GSM"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "JMAGSM")
+          my_dtyp[${ityp}]="JMAGSM"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NAM")
+          my_dtyp[${ityp}]="NAM"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NARR")
+          my_dtyp[${ityp}]="NARR"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NCEP2")
+          my_dtyp[${ityp}]="NCEP2"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NNRP")
+          my_dtyp[${ityp}]="NNRP"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NOGAPS")
+          my_dtyp[${ityp}]="NOGAPS"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NOGAPS_SOIL")
+          my_dtyp[${ityp}]="NOGAPS_needs_GFS_soil"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "NAVYSST")
+          my_dtyp[${ityp}]="NavySST"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "RAP_HYBRID")
+          my_dtyp[${ityp}]="RAP.hybrid.ncep"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "RAP_PRES")
+          my_dtyp[${ityp}]="RAP.pressure.ncep"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "RAP_SIGMA")
+          my_dtyp[${ityp}]="RAP.sigma.gsd"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "RUCB")
+          my_dtyp[${ityp}]="RUCb"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "RUCP")
+          my_dtyp[${ityp}]="RUCp"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "SST")
+          my_dtyp[${ityp}]="SST"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "TCRP")
+          my_dtyp[${ityp}]="TCRP"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "UKMO_ENDGAME")
+          my_dtyp[${ityp}]="UKMO_ENDGame"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "UKMO_LANDSEA")
+          my_dtyp[${ityp}]="UKMO_LANDSEA"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      "UKMO_NO_HEIGHTS")
+          my_dtyp[${ityp}]="UKMO_no_heights"
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+      *)
+          my_vsfx[${ityp}]="${my_vsfx[${ityp}]:-${my_dtyp[${ityp}]}}"
+          my_vtbl[${ityp}]="Vtable.${my_vsfx[${ityp}]}"
+        ;;
+    esac
+  done
+
+  export FILE_TYPE="${my_dtyp[@]}"
+  export VTABLE_SFX="${my_vsfx[@]:0:${#my_dtyp[@]}}"
+  export VTABLE_NAME="${my_vtbl[@]:0:${#my_dtyp[@]}}"
+
+  return 0
+}
+
+# -------------------------------------------------------
+# checkNameLists()
+# Usage:      checkNameLists
+# Parameters: NONE
+# Returns:    0
+# Exports:    NONE
+# Echoes:     NONE
+#
+# Checks the WRF/WPS namelists for consistency.
+# -------------------------------------------------------
+checkNameLists()
+{
+  local nm_func="${FUNCNAME[0]}"
+
+  local nmlst_wrf="namelist.input"
+  local nmlst_wps="namelist.wps"
+
+  local xpr1 xpr2
+  local my_str1 my_val1 my_str2 my_val2
+  local nDOMS my_doms ivar
+
+  # -----
+  # Check for the presence of nproc_x and nproc_y lines (they need to be
+  # both present or both absent)
+  my_str1="$( echo "`getNameListVar ${nmlst_wrf} nproc_x`" | awk '{print $1}' )"
+    [ $? -ne 0 ] && my_str1=
+  my_str2="$( echo "`getNameListVar ${nmlst_wrf} nproc_y`" | awk '{print $1}' )"
+    [ $? -ne 0 ] && my_str2=
+
+  if [ -n "${my_str1:+1}" -a -z "${my_str2}" ] || \
+     [ -z "${my_str1}"    -a -n "${my_str2:+1}" ]; then
+    procError "both \"nproc_x\" and \"nproc_y\" should be defined" \
+              "in the WRF input file: ${nmlst_wrf}"
+  fi
+  # -----
+
+
+  # -----
+  # Check the number of domains in "nmlst_wrf", "nmlst_wps"
+  # The number of domains for all WRF/WPS files should be exactly the same
+  # nmlst_wrf file
+  my_str1="`getNameListVar ${nmlst_wrf} max_dom`"
+    [ $? -ne 0 ] && my_str1=
+  my_str2="`getNameListVar ${nmlst_wps} max_dom`"
+    [ $? -ne 0 ] && my_str2=
+
+  if [ -z "${my_str1}" ]; then
+    procError "\"max_dom\" not found" \
+              "in the WRF input file: ${nmlst_wrf}"
+  fi
+
+  if [ -z "${my_str2}" ]; then
+    procError "\"max_dom\" not found" \
+              "in the WPS input file: ${nmlst_wps}"
+  fi
+
+  nDOMS="$( echo "${my_str1}" | awk '{print $3}' )"
+  nDOMS="`getPosInteger "${nDOMS}"`"
+  nDOMS="${nDOMS:-1}"
+
+  my_doms="$( echo "${my_str2}" | awk '{print $3}' )"
+  my_doms="`getPosInteger "${my_doms}"`"
+  my_doms="${my_doms:-1}"
+
+  if [ ${nDOMS} -ne ${my_doms} ]; then
+      procError "inconsistent number of domains in:" \
+                "WRF file: ${nmlst_wrf}" \
+                "WPS file: ${nmlst_wps}"
+  fi
+  # -----
+
+
+  # -----
+  # Check the following variables for consistency in the files
+  # "nmlst_wrf" and "nmlst_wps"
+  vars_to_check="interval_seconds i_parent_start j_parent_start
+                 s_we e_we s_sn e_sn dx dy"
+  for ivar in ${vars_to_check}
+  do
+    my_str1="`getNameListVar ${nmlst_wrf} ${ivar} ${nDOMS}`"
+    if [ $? -ne 0 ]; then
+      echo "${my_str1}"
+      exit 1
+    fi
+
+    my_str2="`getNameListVar ${nmlst_wps} ${ivar} ${nDOMS}`"
+    if [ $? -ne 0 ]; then
+      echo "${my_str2}"
+      exit 1
+    fi
+
+    if [ "`toUPPER "${my_str1}"`" != "`toUPPER "${my_str2}"`" ]; then
+        procError "inconsistent values for the variable \"${ivar}\" found in:" \
+                  "WRF file: ${nmlst_wrf}" \
+                  "WPS file: ${nmlst_wps}"
+    fi
+  done
+  # -----
+
+  return 0
+}
+
+GetListGribDataFiles()
+{
+  local nm_func="${FUNCNAME[0]}"
+
+  local tmpLIST tmpNAMES ifile
+
+  if [ $# -lt 2 ]; then
+    procError "need to define the list of directories and the file reg. expression to examine" \
+              "usage: ${nm_func} dir_list file_string"
+  fi
+
+  searchFILE "${1}" "${2}"
+  tmpLIST="${foundFilePath}"
+  unset foundFilePath
+
+  if [ -n "${tmpLIST:+1}" ]; then
+    for ifile in ${tmpLIST}
+    do
+      if [ -n "$(isGrib "${ifile}")" ]; then
+        tmpNAMES="${tmpNAMES} ${ifile}"
+      fi
+    done
+  fi
+
+  echo "$( strTrim "${tmpNAMES}" 2 )"
+}

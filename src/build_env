@@ -1,0 +1,89 @@
+############################################################
+# This is a template of environment file "build_env" that it is
+#   sourced from within the "system_build.sh" script.
+# It is a "bash" style file.
+# All the variables defined here can also be passed to the
+#   script in the command line (options passed in the command line
+#   overwrite the values of the variables supplied here.
+# To see the options that can be passed to the "system_build.sh" script
+#   and their associated environment variables run the scripts as:
+#   system_build.sh -h|-help|--h|--help
+
+# Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+#                                 <velissariou.1@osu.edu>
+# Version: 1.0
+#
+# Version - 1.0 Thu Oct 29 2015
+############################################################
+
+
+# For a full list of all environment variables that
+# can be set here run: system_build.sh -h
+
+
+####################
+# MANDATORY VARIABLES
+####################
+ROMS_APPLICATION=DEFAULT
+MY_PROJECT_DIR=/data1/GOMSYS-DEFAULT
+####################
+
+
+####################
+# FOR INTEL COMPILERS ONLY
+####################
+COMPILER=ifort
+
+#COMPSYSTEM=intel
+COMPSYSTEM=intel12
+#COMPSYSTEM=intel13
+
+#MPISYSTEM=mvapich2
+MPISYSTEM=openmpi
+
+MODFILES="${COMPSYSTEM} ${MPISYSTEM:+${COMPSYSTEM}-${MPISYSTEM}}"
+####################
+
+
+####################
+# FOR GNU COMPILERS ONLY
+####################
+#COMPILER=gfortran
+
+#COMPSYSTEM=gnu
+
+#MPISYSTEM=mvapich2
+#MPISYSTEM=openmpi
+
+#MODFILES="${MPISYSTEM:+${COMPSYSTEM}-${MPISYSTEM}}"
+####################
+
+
+USE_DEBUG=no
+BUILD_WPS=no
+
+##### MPI
+USE_MPI=yes
+USE_MPIF90=yes
+
+##### NETCDF
+USE_LARGE=yes
+NETCDF_INCDIR=/opt/hpc/${COMPSYSTEM:+${COMPSYSTEM}/}include
+NETCDF_LIBDIR=/opt/hpc/${COMPSYSTEM:+${COMPSYSTEM}/}lib64
+
+##### MODEL COUPLING TOOLKIT (MCT)
+USE_MCT=yes
+MCT_INCDIR=/opt/hpc/${COMPSYSTEM:+${COMPSYSTEM}/}${MPISYSTEM:+${MPISYSTEM}/}include/mct28
+MCT_LIBDIR=/opt/hpc/${COMPSYSTEM:+${COMPSYSTEM}/}${MPISYSTEM:+${MPISYSTEM}/}lib64/mct28
+
+##### JASPER (for grib2 support in WRF/WPS)
+USE_JASPER=yes
+JASPER_ROOT=/usr
+JASPER_INCDIR=${JASPER_ROOT}/include/jasper
+JASPER_LIBDIR=${JASPER_ROOT}/lib64
+
+##### NCL (just to create some ncl scripts in WPS)
+USE_NCL=yes
+NCL_INCDIR=/usr/include/ncarg
+NCL_LIBDIR=/usr/lib64/ncarg
+NCL_XLIBS="-lgfortran"

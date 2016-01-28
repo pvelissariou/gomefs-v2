@@ -1,0 +1,71 @@
+FUNCTION CVSurfNormalDir,        $
+           unvect, point, cvidx, $
+           DIMS = dims,          $
+           NVECT = nvect,        $
+           PLANE = plane
+
+  on_error, 2
+
+  ; The unit normal vector to adjust if needed
+  if (n_elements(unvect) eq 0) then $
+    message, 'a 1-D vector is required for: UNVECT'
+
+  ; The point to check
+  elPNT = n_elements(point)
+  if (elPNT eq 0) then begin
+    message, 'an 1-D vector or an integer scalar is required for: POINT'
+  endif else begin
+    if (elPNT gt 1) then begin
+      if (array_equal(size(point), size(dims)) ne 1) then $
+        message, 'same size 1-D vectors are required for: POINT and DIMS'
+      if (elPNT gt 3) then $
+        message, 'at most 3 dimensions are supported for: POINT and DIMS'
+    endif
+  endelse
+
+  ; The indices of the grid points within the CV
+  if (size(cvidx, /N_DIMENSIONS) gt 1) then $
+    message, '1-D vector or an integer scalar is required for: CVIDX'
+
+  ; ----- Work on one dimension only
+  if (elPNT eq 1) then begin
+    chkidx = round(abs(point))
+    idx = where(cvidx eq chkidx, icnt)
+    if (icnt ne 0) then begin
+      OUT_unvect =  ZeroFloatFix( -1.0 * unvect)
+      if (n_elements(nvect) ne 0) then nvect  = ZeroFloatFix( -1.0 * nvect )
+      if (n_elements(plane) ne 0) then plane  = ZeroFloatFix( -1.0 * plane )
+    endif
+  endif
+
+  OUT_unvect = unvect
+
+  ; ----- Work on two dimensions
+  if (elPNT eq 2) then begin
+    IDIM = round(abs(dims[0]))
+    JDIM = round(abs(dims[1]))
+    chkidx = point[1] * IDIM + point[0]
+    idx = where(cvidx eq chkidx, icnt)
+    if (icnt ne 0) then begin
+      OUT_unvect =  ZeroFloatFix( -1.0 * unvect)
+      if (n_elements(nvect) ne 0) then nvect  = ZeroFloatFix( -1.0 * nvect )
+      if (n_elements(plane) ne 0) then plane  = ZeroFloatFix( -1.0 * plane )
+    endif
+  endif
+
+  ; ----- Work on three dimensions
+  if (elPNT eq 3) then begin
+    IDIM = round(abs(dims[0]))
+    JDIM = round(abs(dims[1]))
+    KDIM = round(abs(dims[2]))
+    chkidx = point[2] * JDIM + point[1] * IDIM + point[0]
+    idx = where(cvidx eq chkidx, icnt)
+    if (icnt ne 0) then begin
+      OUT_unvect =  ZeroFloatFix( -1.0 * unvect)
+      if (n_elements(nvect) ne 0) then nvect  = ZeroFloatFix( -1.0 * nvect )
+      if (n_elements(plane) ne 0) then plane  = ZeroFloatFix( -1.0 * plane )
+    endif
+  endif
+
+  return, OUT_unvect
+end

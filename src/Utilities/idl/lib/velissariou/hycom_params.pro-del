@@ -1,0 +1,87 @@
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;%%%%%%%%%% HYCOM RELATED PARAMETERS
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;-------------------------------------------------
+; ---------- Global HYCOM
+hycDAT_id = 'GLBa0.08'
+if (n_elements(experiment) eq 0) then begin
+  hycDAT_exprnt = '90.8'
+endif else begin
+  hycDAT_exprnt = strcompress(experiment, /REMOVE_ALL)
+endelse
+
+hyc_glstr = 'gom_GLBHC'
+hyc_rgstr = 'gom_REGHC'
+
+;hycDAT_rootDIR  = '/Net/hycom/GLBa0.08/expt_90.8/data'
+;hycDAT_rootDIR = FilePath('expt_' + hycDAT_exprnt, Root_Dir = '/Net', $
+;                         SubDirectory = ['gfs1', 'hycom', hycDAT_id])
+hycDAT_rootDIR = FilePath('data', Root_Dir = '/Net/hycom/ftp/datasets', $
+                         SubDirectory = [hycDAT_id, 'analysis'])
+
+;-------------------------------------------------
+; ---------- GOM HYCOM
+;hycDAT_id = 'GOMl0.04'
+;hycDAT_exprnt = '30.1'
+;hycDAT_outstr = 'gom_HC'
+
+;hycDAT_rootDIR  = '/Net/gfs6/hycom/GOMl0.04/expt_30.1/2010'
+;hycDAT_rootDIR = FilePath('expt_' + hycDAT_exprnt, Root_Dir = '/Net', $
+;                         SubDirectory = ['gfs6', 'hycom', hycDAT_id])
+
+;-------------------------------------------------
+; input/output directories relative to GoM HYCOM directory
+hyc_rootDIR  = '/home/takis/GMEXICO'
+;hyc_rootDIR  = '/nexsan/people/takis'
+hyc_dataDIR  = FilePath('Data', Root_Dir = hyc_rootDIR, SubDirectory = 'DATA-HYCOM')
+hyc_outDIR   = FilePath('Output', Root_Dir = hyc_rootDIR, SubDirectory = 'DATA-HYCOM')
+hyc_plotsDIR = FilePath('plots', Root_Dir = hyc_rootDIR, SubDirectory = 'DATA-HYCOM')
+
+; the HYCOM related data/parameters file
+if (n_elements(str1_res) ne 0) then begin
+  inp_HCPARAMS = FilePath('gom' + str1_res + '_GLBHCparams.dat', Root_Dir = hyc_dataDIR)
+  hyc_bath = FilePath('gom' + str1_res + '_GLBHCparams.dat', Root_Dir = hyc_dataDIR)
+endif else begin
+  inp_HCPARAMS = FilePath('gom' + '_GLBHCparams.dat', Root_Dir = hyc_dataDIR)
+  hyc_bath = FilePath('gom' + '_GLBHCparams.dat', Root_Dir = hyc_dataDIR)
+endelse
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+; This is the average earth radius as defined in HYCOM
+; We use this here to define the defaults for all model
+; calculations.
+;Always use double precision
+EARTH_RADIUS = (n_elements(EARTH_RADIUS) ne 0) ? EARTH_RADIUS : 6371001.0D
+
+; for HYCOM data gathering (sets the HYCOM domain to enclose
+; the GoM domain)
+hyc_LON_MIN = -100.00
+hyc_LON_MAX =  -74.00
+hyc_LAT_MIN =   16.00
+hyc_LAT_MAX =   34.00
+
+hyc_LON0 = -101.00
+hyc_LAT0 =   15.0
+hyc_LON  = 0.5 * (hyc_LON_MIN + hyc_LON_MAX)
+hyc_LAT  = 0.5 * (hyc_LAT_MIN + hyc_LAT_MAX)
+
+hyc_map_coords = [ hyc_LAT_MIN, hyc_LON_MIN, hyc_LAT_MAX, hyc_LON_MAX ]
+
+; for HYCOM plots
+hycPLOT_LON_MIN = -100.00
+hycPLOT_LON_MAX =  -74.00
+hycPLOT_LAT_MIN =   16.00
+hycPLOT_LAT_MAX =   34.00
+hycPLOT_map_coords = [ hycPLOT_LAT_MIN, hycPLOT_LON_MIN, hycPLOT_LAT_MAX, hycPLOT_LON_MAX ]
+
+hyc_map_proj = 'Mercator'
+hyc_mapStruct = VL_GetMapStruct(hyc_map_proj, $
+                                CENTER_LATITUDE     = hyc_LAT, $
+                                CENTER_LONGITUDE    = hyc_LON, $
+                                TRUE_SCALE_LATITUDE = hyc_LAT, $
+                                DATUM               = 'Sphere',   $
+                                SEMIMAJOR_AXIS      = EARTH_RADIUS, $
+                                SEMIMINOR_AXIS      = EARTH_RADIUS)
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

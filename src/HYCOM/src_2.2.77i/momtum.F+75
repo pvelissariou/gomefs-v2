@@ -1,0 +1,3803 @@
+      subroutine momtum_hs(m,n)
+      use mod_xc    ! HYCOM communication interface
+      use mod_pipe  ! HYCOM debugging interface
+      use mod_tides ! HYCOM tides
+      implicit none
+c
+      include 'common_blocks.h'
+c
+      integer m,n
+c
+c --- -----------------------------------------
+c --- hydrostatic equation (and surface stress)
+c --- -----------------------------------------
+c
+      logical, parameter :: lpipe_momtum=.false.      !usually .false.
+      real,    parameter :: dragw_rho=0.00536*1026.0  !ice-ocean drag from CICE
+c
+c --- momtum setup of /momtumr4/, only 1st 6 arrays used here
+      real, dimension (1-nbdy:idm+nbdy,1-nbdy:jdm+nbdy) ::
+     &                 stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 vis2u,vis4u,vis2v,vis4v,vort,
+     &                 wgtia,wgtib,wgtja,wgtjb,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,
+     &                 pnk0,pnkp
+      common/momtumr4/ stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 vis2u,vis4u,vis2v,vis4v,vort,
+     &                 wgtia,wgtib,wgtja,wgtjb,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,
+     &                 pnk0,pnkp
+      save  /momtumr4/
+c
+      real    dpdn,dpup,q,simo,uimo,vimo,dpsur,psur,usur,vsur,
+     &        sumdp,sumth,thksur
+      integer i,j,k,kl,l,mbdy,hlstep
+c
+*     real*8    wtime
+*     external  wtime
+*     real*8    wtime1(10),wtime2(20,kdm),wtimes
+c
+      include 'stmt_fns.h'
+c
+      mbdy = 6
+c
+c --- dp has up to date halos from cnuity or mod_hycom
+      call xctilr(dpmixl(1-nbdy,1-nbdy,  m),1,   1, 6,6, halo_ps)
+      call xctilr(pbavg( 1-nbdy,1-nbdy,1  ),1,   2, 6,6, halo_ps)
+      call xctilr(saln(  1-nbdy,1-nbdy,1,m),1,  kk, 6,6, halo_ps)
+      call xctilr(temp(  1-nbdy,1-nbdy,1,m),1,  kk, 6,6, halo_ps)
+      call xctilr(th3d(  1-nbdy,1-nbdy,1,m),1,  kk, 6,6, halo_ps)
+      if     (windf .and. iceflg.eq.2) then
+        kl=max(nsigma,1)
+        call xctilr(u(      1-nbdy,1-nbdy,1,n),1,kl, 1,1, halo_uv)
+        call xctilr(ubavg(  1-nbdy,1-nbdy,  n),1, 1, 1,1, halo_uv)
+        call xctilr(v(      1-nbdy,1-nbdy,1,n),1,kl, 1,1, halo_vv)
+        call xctilr(vbavg(  1-nbdy,1-nbdy,  n),1, 1, 1,1, halo_vv)
+      endif
+c
+c --- tidal forcing
+c
+      if(tidflg.eq.2 .or. tidflg.eq.3) then
+         hlstep=0
+         call tides_force(hlstep)
+      endif
+c
+c --- hydrostatic equation (and surface stress)
+c
+*        wtime1( 1) = wtime()
+c
+c --- rhs: th3d.m, temp.m, saln.m, p, pbavg.m
+c --- lhs: thstar, p, oneta, montg
+c
+      margin = mbdy
+c
+!$OMP PARALLEL DO PRIVATE(j,l,k,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            sumdp = 0.0
+            sumth = 0.0
+            do k=1,kk
+              if (kapref.ne.0) then  !thermobaric
+c
+c ---   sigma-star is virtual potential density, as defined in 
+c ---   Sun et.al. (1999), 'Inclusion of thermobaricity in 
+c ---   isopycnic-coordinate ocean models', JPO 29 pp 2719-2729.
+c
+c ---   use upper interface pressure in converting sigma to sigma-star.
+c ---   to avoid density variations in layers intersected by bottom
+c
+                if     (kapref.gt.0) then
+                  thstar(i,j,k,1)=th3d(i,j,k,m)
+     &                             +kappaf(temp(i,j,k,m),
+     &                                     saln(i,j,k,m),
+     &                                     th3d(i,j,k,m)+thbase,
+     &                                        p(i,j,k),
+     &                                     kapref)
+                else
+                  thstar(i,j,k,1)=th3d(i,j,k,m)
+     &                             +kappaf(temp(i,j,k,m),
+     &                                     saln(i,j,k,m),
+     &                                     th3d(i,j,k,m)+thbase,
+     &                                        p(i,j,k),
+     &                                     2)
+                  thstar(i,j,k,2)=th3d(i,j,k,m)
+     &                             +kappaf(temp(i,j,k,m),
+     &                                     saln(i,j,k,m),
+     &                                     th3d(i,j,k,m)+thbase,
+     &                                        p(i,j,k),
+     &                                     kapi(i,j))
+                endif !kapref
+              else  !non-thermobaric
+                thstar(i,j,k,1)=th3d(i,j,k,m)
+              endif  !thermobaric:else
+c
+              p(i,j,k+1)=p(i,j,k)+dp(i,j,k,m)
+c
+              if     (sshflg.ne.0) then
+                sumth = sumth + dp(i,j,k,m)*th3d(i,j,k,m)
+                sumdp = sumdp + dp(i,j,k,m)
+              endif !sshflg
+            enddo !k
+c
+            if     (sshflg.ne.0) then
+              sumth = sumth / max( sumdp, onemm )  !vertical mean of th3d
+              sumdp = sumdp*qonem * g              !depth(m) * g
+              steric(i,j) =  sshgmn(i,j) +
+     &                      (sshgmn(i,j) + sumdp) *
+     &                      (thmean(i,j) - sumth) /
+     &                      (1000.0+thbase+sumth)
+            endif !sshflg
+c
+c ---       store (1+eta) (= p_total/p_prime) in -oneta-
+            oneta(i,j)=1.+pbavg(i,j,m)/p(i,j,kk+1)
+c
+c ---       m_prime in lowest layer:
+            montg(i,j,kk,1)=psikk(i,j,1)+
+     &        ( p(i,j,kk+1)*(thkk(i,j,1)-thstar(i,j,kk,1))
+     &          -pbavg(i,j,m)*(thstar(i,j,kk,1)+thbase) )*thref**2
+            if     (kapref.eq.-1) then
+              montg(i,j,kk,2)=psikk(i,j,2)+
+     &          ( p(i,j,kk+1)*(thkk(i,j,2)-thstar(i,j,kk,2))
+     &            -pbavg(i,j,m)*(thstar(i,j,kk,2)+thbase) )*thref**2
+            endif !kapref.eq.-1
+c
+c ---       m_prime in remaining layers:
+            do k=kk-1,1,-1
+              montg(i,j,k,1)=montg(i,j,k+1,1)+p(i,j,k+1)*oneta(i,j)
+     &            *(thstar(i,j,k+1,1)-thstar(i,j,k,1))*thref**2
+              if     (kapref.eq.-1) then
+                montg(i,j,k,2)=montg(i,j,k+1,2)+p(i,j,k+1)*oneta(i,j)
+     &              *(thstar(i,j,k+1,2)-thstar(i,j,k,2))*thref**2
+              endif !kapref.eq.-1
+            enddo !k
+c
+c ---       srfhgt (used diagnostically, in mxmyaij and for tidal SAL).
+            if     (kapref.ne.-1) then
+              montg1(i,j) =                 montg(i,j,1,1)
+            else
+              montg1(i,j) =      skap(i,j) *montg(i,j,1,1) +
+     &                      (1.0-skap(i,j))*montg(i,j,1,2)
+            endif !kapref
+            srfhgt(i,j) = montg1(i,j) + thref*pbavg(i,j,m)
+c
+cdiag       if     (sshflg.ne.0) then
+cdiag         if     (itest.gt.0 .and. jtest.gt.0) then
+cdiag           write (lp,'(i9,2i5,3x,a,2f12.6,f12.2)')
+cdiag.            nstep,itest+i0,jtest+j0,
+cdiag.              'sssh =',
+cdiag.              steric(i,j),sshgmn(i,j),sumdp
+cdiag           write (lp,'(i9,2i5,3x,a,3f12.6)')
+cdiag.            nstep,itest+i0,jtest+j0,
+cdiag.              'thmn =',
+cdiag.              sumth,thmean(i,j),1000.0+thbase+sumth
+cdiag           write (lp,'(i9,2i5,3x,a,3f12.6)')
+cdiag.            nstep,itest+i0,jtest+j0,
+cdiag.              'ssh  =',
+cdiag.              srfhgt(i,j),steric(i,j),srfhgt(i,j)-steric(i,j)
+cdiag         endif !test
+cdiag       endif !sshflg
+c
+c ---       tidal corrections, note that these are not part of montg
+c ---       but are included here to simplify the pressure gradient.
+c ---       SAL should only be applied to the mass anomally, i.e. to
+c ---       non-steric SSH, so use sshflg>0 except in tides-only cases.
+            if     (tidflg.gt.0 .and. sshflg.eq.0) then !tides
+              do k=1,kk
+                montg(i,j,k,1)=montg(i,j,k,1)-g*etide( i,j)
+     &                             -salfac(i,j)*srfhgt(i,j)
+                if     (kapref.eq.-1) then
+                  montg(i,j,k,2)=montg(i,j,k,2)-g*etide( i,j)
+     &                               -salfac(i,j)*srfhgt(i,j)
+                endif !kapref.eq.-1
+              enddo !k
+            elseif (tidflg.gt.0 .and. sshflg.ne.0) then !tides
+              do k=1,kk
+                montg(i,j,k,1)=montg(i,j,k,1)
+     &                            -g*etide(i,j)
+     &                  -salfac(i,j)*(srfhgt(i,j)-steric(i,j))
+                if     (kapref.eq.-1) then
+                  montg(i,j,k,2)=montg(i,j,k,2)
+     &                              -g*etide(i,j)
+     &                    -salfac(i,j)*(srfhgt(i,j)-steric(i,j))
+                endif !kapref.eq.-1
+              enddo !k
+            endif !tides (sshflg)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- account for temporal smoothing of mid-time dpmixl. calculate the vertical
+c --- excursions of the coordinates immediately above and below the mixed
+c --- layer base, then vertically interpolate this motion to dpmixl(i,j,m)
+c
+      if(hybrid .and. mxlkta) then
+c
+c ---   rhs: dp, dpmixl.m
+c ---   lhs: util1, util2
+c
+        margin = mbdy
+c
+!$OMP   PARALLEL DO PRIVATE(j,l,i,k,dpup,dpdn,q)
+!$OMP&         SCHEDULE(STATIC,jblk)
+        do j=1-margin,jj+margin
+          do l=1,isp(j)
+            do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+              util1(i,j)=0.
+              util2(i,j)=0.
+            enddo !i
+            do k=1,kk
+              do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+                util1(i,j)=util2(i,j)
+                util2(i,j)=util2(i,j)+dpo(i,j,k,m)
+                if     (util2(i,j).ge.dpmixl(i,j,m).and.
+     &                  util1(i,j).lt.dpmixl(i,j,m)     ) then
+                  dpup=p(i,j,k  )-util1(i,j)
+                  dpdn=p(i,j,k+1)-util2(i,j)
+                  q=(util2(i,j)-dpmixl(i,j,m))/max(onemm,dpo(i,j,k,m))
+                  dpmixl(i,j,m)=dpmixl(i,j,m)+(dpdn+q*(dpup-dpdn))
+                endif
+              enddo !i
+            enddo !k
+          enddo !l
+        enddo !j
+!$OMP   END PARALLEL DO
+      endif
+c
+c --- --------------
+c --- surface stress
+c --- --------------
+c
+      if     (windf) then
+        margin = 0
+c
+!$OMP   PARALLEL DO PRIVATE(j,l,i,k,
+!$OMP&                      dpsur,psur,usur,vsur,thksur,uimo,vimo,simo)
+!$OMP&           SCHEDULE(STATIC,jblk)
+        do j=1-margin,jj+margin
+          do l=1,isp(j)
+            do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+              if     (wndflg.eq.2) then ! tau on p grid
+                surtx(i,j)=( taux(i,j,l0)*w0+taux(i,j,l1)*w1
+     &                      +taux(i,j,l2)*w2+taux(i,j,l3)*w3)
+                surty(i,j)=( tauy(i,j,l0)*w0+tauy(i,j,l1)*w1
+     &                      +tauy(i,j,l2)*w2+tauy(i,j,l3)*w3)
+              else ! tau on u&v grids - NOT RECOMMEDED
+                surtx(i,j)=( (taux(i,j,l0)+taux(i+1,j,l0))*w0
+     &                      +(taux(i,j,l1)+taux(i+1,j,l1))*w1
+     &                      +(taux(i,j,l2)+taux(i+1,j,l2))*w2
+     &                      +(taux(i,j,l3)+taux(i+1,j,l3))*w3)*0.5
+                surty(i,j)=( (tauy(i,j,l0)+tauy(i,j+1,l0))*w0
+     &                      +(tauy(i,j,l1)+tauy(i,j+1,l1))*w1
+     &                      +(tauy(i,j,l2)+tauy(i,j+1,l2))*w2
+     &                      +(tauy(i,j,l3)+tauy(i,j+1,l3))*w3)*0.5
+              endif
+              if     (iceflg.eq.2 .and. si_c(i,j).gt.0.0) then
+c ---           average currents over top thkcdw meters
+                thksur = onem*min( thkcdw, depths(i,j) )
+                usur   = 0.0
+                vsur   = 0.0
+                psur   = 0.0
+                do k= 1,kk
+                  dpsur = min( dpo(i,j,k,n), max( 0.0, thksur-psur ) )
+                  usur  = usur + dpsur*(u(i,j,k,n)+u(i+1,j,k,n))
+                  vsur  = vsur + dpsur*(v(i,j,k,n)+v(i,j+1,k,n))
+                  psur  = psur + dpsur
+                  if     (psur.ge.thksur) then
+                    exit
+                  endif
+                enddo !k
+                usur  = 0.5*( usur/psur + ubavg(i,  j,n) +
+     &                                    ubavg(i+1,j,n)  )
+                vsur  = 0.5*( vsur/psur + vbavg(i,j,  n) +
+     &                                    vbavg(i,j+1,n)  )
+c               allow for ice-ocean stress
+                uimo = si_u(i,j) - usur
+                vimo = si_v(i,j) - vsur
+                simo = sqrt( uimo**2 + vimo**2 )
+                surtx(i,j)=(1.0-si_c(i,j))*surtx(i,j) +
+     &                          si_c(i,j) *dragw_rho*simo*uimo
+                surty(i,j)=(1.0-si_c(i,j))*surty(i,j) +
+     &                          si_c(i,j) *dragw_rho*simo*vimo
+              endif !ice-ocean stress
+            enddo !i
+          enddo !l
+        enddo !j
+!$OMP   END PARALLEL DO
+c
+        call xctilr(surtx,1,1, 6,6, halo_ps)
+        call xctilr(surty,1,1, 6,6, halo_ps)
+      endif !windf
+c
+      return
+      end
+c
+      subroutine momtum(m,n)
+      use mod_xc    ! HYCOM communication interface
+      use mod_pipe  ! HYCOM debugging interface
+      use mod_tides ! HYCOM tides
+      implicit none
+c
+      include 'common_blocks.h'
+c
+      integer m,n
+c
+c --- ---------------------------------------------------------
+c --- momentum equations (2nd order version)
+c
+c --- Enstrophy conserving advection scheme (Sadourney, 1975)
+c
+c --- diffusion is Laplacian and/or biharmonic, both with
+c --- "constant" and deformation dependent coefficients.
+c
+c --- hydrostatic equation and surface stress via momtum_hs
+c --- ---------------------------------------------------------
+c --- on entry:
+c ---  saln(:,:,:,m) = time step t   with RA time smoothing
+c ---  saln(:,:,:,n) = time step t+1
+c
+c ---    dp(:,:,:,m) = time step t   with RA time smoothing
+c ---    dp(:,:,:,n) = time step t+1
+c
+c ---   dpo(:,:,:,n) = time step t-1
+c ---   dpo(:,:,:,m) = time step t
+c
+c ---   dpv(:,:,:,n) = time step t-1
+c ---   dpv(:,:,:,m) = time step t
+c ---   dpu(:,:,:,n) = time step t-1
+c ---   dpu(:,:,:,m) = time step t
+c
+c ---     v(:,:,:,n) = time step t-1
+c ---     v(:,:,:,m) = time step t
+c ---     u(:,:,:,n) = time step t-1
+c ---     u(:,:,:,m) = time step t
+c
+c --- on exit:
+c ---   dpv(:,:,:,m) = time step t   with RA time smoothing
+c ---   dpv(:,:,:,n) = time step t+1
+c ---   dpu(:,:,:,m) = time step t   with RA time smoothing
+c ---   dpu(:,:,:,n) = time step t+1
+c
+c ---     v(:,:,:,m) = time step t   with RA time smoothing
+c ---     v(:,:,:,n) = time step t+1
+c ---     u(:,:,:,m) = time step t   with RA time smoothing
+c ---     u(:,:,:,n) = time step t+1
+c
+c --- vtotn(:,:)     = time step t-1 to t+1 barotropic tendency
+c --- utotn(:,:)     = time step t-1 to t+1 barotropic tendency
+c --- ---------------------------------------------------------
+c
+      logical, parameter :: lpipe_momtum=.false.  !usually .false.
+c
+      real, dimension (1-nbdy:idm+nbdy,1-nbdy:jdm+nbdy) ::
+     &                 stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 vis2u,vis4u,vis2v,vis4v,vort,
+     &                 wgtia,wgtib,wgtja,wgtjb,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,
+     &                 pnk0,pnkp
+      common/momtumr4/ stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 vis2u,vis4u,vis2v,vis4v,vort,
+     &                 wgtia,wgtib,wgtja,wgtjb,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,
+     &                 pnk0,pnkp
+      save  /momtumr4/
+c
+      integer ifirst
+      save    ifirst
+c
+      real dpia,dpib,dpja,dpjb,vis2a,vis4a,vis2b,vis4b,
+     &     scuya,scuyb,scvxa,scvxb,vmag,dall,adrlim,
+     &     dpxy,ptopl,pbotl,cutoff,qcutoff,h1,q,deform,aspy2,aspx2,
+     &     dt1inv,phi,plo,pbop,pthkbl,ubot,vbot,pstres,
+     &     dmontg,dthstr,dragu,dragv,qdpu,qdpv,dpthin,
+     &     dpun,uhm,uh0,uhp,dpvn,vhm,vh0,vhp,sum_m,sum_n
+
+      integer i,ia,ib,j,ja,jb,k,ka,l,mbdy
+c
+*     real*8    wtime
+*     external  wtime
+*     real*8    wtime1(10),wtime2(20,kdm),wtimes
+c
+      character text*12
+      integer, save, dimension (1-nbdy:idm+nbdy,1-nbdy:jdm+nbdy) ::
+     & mask
+c
+      real hfharm,a,b
+      include 'stmt_fns.h'
+c
+c --- harmonic mean divided by 2
+      hfharm(a,b)=a*b/(a+b)
+c
+      data ifirst / 0 /
+c
+      mbdy = 6
+c
+c --- dp and dpo have up to date halos from cnuity
+      call xctilr(dpu(  1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_us)
+      call xctilr(dpv(  1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_vs)
+      call xctilr(u(    1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_uv)
+      call xctilr(v(    1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_vv)
+      call xctilr(ubavg(1-nbdy,1-nbdy,1  ),1,   2, 6,6, halo_uv)
+      call xctilr(vbavg(1-nbdy,1-nbdy,1  ),1,   2, 6,6, halo_vv)
+      call xctilr(uflx( 1-nbdy,1-nbdy,1  ),1,  kk, 6,6, halo_uv)
+      call xctilr(vflx( 1-nbdy,1-nbdy,1  ),1,  kk, 6,6, halo_vv)
+c
+      if     (ifirst.eq.0) then
+        ifirst=1
+c ---   setup zero fill.
+        margin = mbdy
+c
+        do j=1-margin,jj+margin
+          do i=1-margin,ii+margin
+            vis2u(i,j)=0.0
+            vis4u(i,j)=0.0
+            vis2v(i,j)=0.0
+            vis4v(i,j)=0.0
+            dl2u( i,j)=0.0
+            dl2v( i,j)=0.0
+          enddo !i
+        enddo !j
+      endif
+c
+c --- ---------------------------------------
+c --- hydrostatic equation and surface stress
+c --- ---------------------------------------
+c
+      call momtum_hs(m,n)
+c
+c +++ ++++++++++++++++++
+c +++ momentum equations
+c +++ ++++++++++++++++++
+c
+*        wtime1( 4) = wtime()
+c
+c --- rhs: p, u.n+, v.n+, ubavg.n+, vbavg.n+, depthv+, pvtrop+
+c --- rhs: dpmixl.m+, taux+, dpu, depthu+, dpv, tauy+
+c --- lhs: util1, util2, drag, ubrhs, stresx, vbrhs, stresy
+c
+      if     (drglim.gt.0.0) then
+        adrlim = drglim
+      else
+        adrlim = 0.125
+      endif
+      dt1inv = 1./delt1
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k,
+!$OMP&                    phi,plo,pbop,ubot,vbot,vmag,dall,pstres)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+c
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+c
+c ---       bottom drag (standard bulk formula)
+c ---       bottom stress is applied over thickness thkbot (or the
+c ---        total depth is this is less)
+c
+            thkbop(i,j)=min( thkbot*onem, p(i,j,kk+1) )
+c
+c ---       the bottom stress term is estimated using velocity averaged
+c ---       over the bottom boundary layer. this thickness is dpbbl for
+c ---       the kpp boundary layer; otherwise, it is thkbop
+c
+            ubot=0.0
+            vbot=0.0
+            if (mxlkpp .and. bblkpp) then
+              pthkbl=max(dpbbl(i,j),thkbop(i,j))  !thknss of bot. b.l.
+            else
+              pthkbl=thkbop(i,j)                  !thknss of bot. b.l.
+            endif
+            pbop=p(i,j,kk+1)-pthkbl               !top of bot. b.l.
+            phi =max(p(i,j,1),pbop)
+            do k=1,kk
+              plo =phi  ! max(p(i,j,k),pbop)
+              phi =max(p(i,j,k+1),pbop)
+              ubot=ubot + (u(i,j,k,n)+u(i+1,j,k,n))*(phi-plo)
+              vbot=vbot + (v(i,j,k,n)+v(i,j+1,k,n))*(phi-plo)
+            enddo !k
+            ubot=ubot/min(pthkbl,p(i,j,kk+1))
+     &            + (ubavg(i,j,n)+ubavg(i+1,j,n))
+            vbot=vbot/min(pthkbl,p(i,j,kk+1))
+     &            + (vbavg(i,j,n)+vbavg(i,j+1,n))
+c
+c ---       drag = Cb * (|v| + c.bar)
+c ---       include 1/thkbop for the fraction of layer calculation
+c ---        and onem for conversion from 1/dp to 1/h
+c
+            vmag=0.5*sqrt(ubot**2+vbot**2)
+            dall=cbp(i,j)*(vmag+cbarp(i,j))  !no tidal drag
+            drag(i,j)=dall*onem/thkbop(i,j)
+            if (mxlkpp .and. bblkpp) then
+              ustarb(i,j)=sqrt(dall*vmag)
+            endif
+c
+c ---       tidal bottom drag
+c
+            util6(i,j)=thkdrg*onem  !bottom stress applied over this thknss
+            util5(i,j)=dragrh(i,j)/min(util6(i,j)*qonem,depths(i,j))
+          enddo !i
+        enddo !l
+c
+c ---   store r.h.s. of barotropic u/v eqn. in -ubrhs,vbrhs-
+c ---   time-interpolate wind stress
+c
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            ubrhs(i,j)=
+     &        (vbavg(i  ,j,  m)*depthv(i  ,j)
+     &        +vbavg(i  ,j+1,m)*depthv(i  ,j+1)
+     &        +vbavg(i-1,j,  m)*depthv(i-1,j)
+     &        +vbavg(i-1,j+1,m)*depthv(i-1,j+1))
+     &        *(pvtrop(i,j)+pvtrop(i,j+1))*.125
+c
+            if     (windf) then
+              if(hybrid .and. mxlkrt) then
+                pstres=0.5*(dpmixl(i,j,m)+dpmixl(i-1,j,m))
+              else
+                pstres=dpu(i,j,1,m)
+              endif
+c ---         units of surtx are N/m^2 (i.e. Pa)
+              stresx(i,j)=(surtx(i,j)+surtx(i-1,j))*0.5*g
+     &                    /(pstres*thref)
+            else  ! no taux
+              stresx(i,j)=0.
+            endif !windf:else
+          enddo !i
+        enddo !l
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            vbrhs(i,j)=
+     &      -(ubavg(i,  j  ,m)*depthu(i,j  )
+     &       +ubavg(i+1,j  ,m)*depthu(i+1,j  )
+     &       +ubavg(i,  j-1,m)*depthu(i,j-1)
+     &       +ubavg(i+1,j-1,m)*depthu(i+1,j-1))
+     &       *(pvtrop(i,j)+pvtrop(i+1,j))*.125
+c
+            if     (windf) then
+              if(hybrid .and. mxlkrt) then
+                pstres=0.5*(dpmixl(i,j,m)+dpmixl(i,j-1,m))
+              else
+                pstres=dpv(i,j,1,m)
+              endif
+c ---         units of surty are N/m^2 (i.e. Pa)
+              stresy(i,j)=(surty(i,j)+surty(i,j-1))*0.5*g
+     &                    /(pstres*thref)
+            else  ! no tauy
+              stresy(i,j)=0.
+            endif !windf:else
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'uba.n  n=',n
+        call pipe_compare(ubavg(1-nbdy,1-nbdy,n),iu,text)
+        write (text,'(a9,i3)') 'vba.n  n=',n
+        call pipe_compare(vbavg(1-nbdy,1-nbdy,n),iv,text)
+        write (text,'(a9,i3)') 'drag   k=',0
+        call pipe_compare(drag,ip,text)
+      endif
+c
+c --- the old  momeq2.f  starts here
+c
+      dpthin  = 0.001*onemm
+      h1      =       tenm  !used in lateral weighting of hor.pres.grad.
+      cutoff  =   0.5*onem
+      qcutoff = 1.0/cutoff
+c
+*        wtime1( 5) = wtime()
+c
+c --- rhs: 0.0
+c --- lhs: util1, util2
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do i=1-margin,ii+margin
+c ---     spatial weighting function for pressure gradient calculation:
+          util1(i,j)=0.0
+          util2(i,j)=0.0
+c ---     p.1 
+          pnkp( i,j)=0.0
+        enddo !i
+      enddo !j
+c
+      do 9 k=1,kk
+c
+c --- store total (barotropic plus baroclinic) flow at old and mid time in
+c --- -utotn,vtotn- and -utotm,vtotm- respectively. store minimum thickness
+c --- values for use in pot.vort. calculation in -dpmx-.
+c --- store p.k and p.k+1 for time level t+1 in pnk0,pnkp
+c
+*         wtime2( 1,k) = wtime()
+c
+c --- rhs: dpmx, dp.m+
+c --- lhs: dpmx
+c
+*     margin = mbdy - 2
+c
+      do i=1-margin,ii+margin
+        dpmx(i,1-margin)=2.*cutoff
+      enddo !i
+!$OMP PARALLEL DO PRIVATE(j,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do i=1-margin,ii+margin
+          dpmx(i,j+1)=2.*cutoff
+        enddo !i
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dpmx(i,j+1)=max(dpmx(i,j+1),dpo(i,j,k,m)+dpo(i-1,j,k,m))
+          enddo !i
+        enddo !l
+c
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            pnk0(i,j)=pnkp(i,j)
+            pnkp(i,j)=pnk0(i,j)+dp(i,j,k,n)
+          enddo !i
+        enddo !l
+      enddo !j
+c
+*         wtime2( 2,k) = wtime()
+c
+c --- rhs: ubavg.m, ubavg.n, dp.m+, dpu
+c --- lhs: utotm, utotn, uflux, dpmx, pu
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+c
+          i=ifu(j,l)-1
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            if     (iuopn(i,j).ne.0) then
+              utotm(i,j)=u(i+1,j,k,m)+ubavg(i,j,m)
+              utotn(i,j)=u(i+1,j,k,n)+ubavg(i,j,n)
+              uflux(i,j)=utotm(i,j)*max(dpo(i,j,k,m),cutoff)
+            endif
+          endif
+          i=ilu(j,l)+1
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            if     (iuopn(i,j).ne.0) then
+              utotm(i,j)=u(i-1,j,k,m)+ubavg(i,j,m)
+              utotn(i,j)=u(i-1,j,k,n)+ubavg(i,j,n)
+              uflux(i,j)=utotm(i,j)*max(dpo(i-1,j,k,m),cutoff)
+            endif
+          endif  
+c
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dpmx(i,j)=max(dpmx(i,j),dpo(i,j,k,m)+dpo(i-1,j,k,m))
+            utotm(i,j)=u(i,j,k,m)+ubavg(i,j,m)
+            utotn(i,j)=u(i,j,k,n)+ubavg(i,j,n)
+            uflux(i,j)=utotm(i,j)*max(dpu(i,j,k,m),cutoff)
+            pu(i,j,k+1)=pu(i,j,k)+dpu(i,j,k,m)
+c
+*               if     ((i.eq.itest .and. j.eq.jtest  ) .or.
+*    .                  (i.eq.itest .and. j.eq.jtest+1)     ) then
+*                 write (lp,'(i8,2i4,i3,2x,a,f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'dpmx       =',
+*    .               dpmx(i,j)*qonem
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'utotm      =',
+*    .               utotm(i,j),u(i,j,k,m),ubavg(i,j,m)
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'utotn      =',
+*    .               utotn(i,j),u(i,j,k,n),ubavg(i,j,n)
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'pu         =',
+*    .               pu( i,j,k+1)*qonem,
+*    .               pu( i,j,k)  *qonem,
+*    .               dpu(i,j,k,m)*qonem
+*               endif !test
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+*         wtime2( 3,k) = wtime()
+c
+c --- rhs: vbavg.m, vbavg.n, dp.m+, dpv
+c --- lhs: vtotm, vtotn, vflux, dpmx, pv
+c
+*     margin = mbdy - 2
+c
+      do i=1-margin,ii+margin
+        do l=1,jsv(i)
+          j=jfv(i,l)-1
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            if      (ivopn(i,j).ne.0) then
+              vtotm(i,j)=v(i,j+1,k,m)+vbavg(i,j,m)
+              vtotn(i,j)=v(i,j+1,k,n)+vbavg(i,j,n)
+              vflux(i,j)=vtotm(i,j)*max(dpo(i,j,k,m),cutoff)
+            endif
+          endif  
+          j=jlv(i,l)+1
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            if      (ivopn(i,j).ne.0) then
+              vtotm(i,j)=v(i,j-1,k,m)+vbavg(i,j,m)
+              vtotn(i,j)=v(i,j-1,k,n)+vbavg(i,j,n)
+              vflux(i,j)=vtotm(i,j)*max(dpo(i,j-1,k,m),cutoff)
+            endif
+          endif  
+        enddo !l
+      enddo !i
+c
+*         wtime2( 4,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            dpmx(i  ,j)=max(dpmx(i  ,j),dpo(i,j,k,m)+dpo(i,j-1,k,m))
+            dpmx(i+1,j)=max(dpmx(i+1,j),dpo(i,j,k,m)+dpo(i,j-1,k,m))
+            vtotm(i,j)=v(i,j,k,m)+vbavg(i,j,m)
+            vtotn(i,j)=v(i,j,k,n)+vbavg(i,j,n)
+            vflux(i,j)=vtotm(i,j)*max(dpv(i,j,k,m),cutoff)
+            pv(i,j,k+1)=pv(i,j,k)+dpv(i,j,k,m)
+          enddo !i
+        enddo !l
+      enddo !j
+c
+c --- define auxiliary velocity fields (via,vib,uja,ujb) to implement
+c --- sidewall friction along near-vertical bottom slopes. wgtja,wgtjb,wgtia,
+c --- wgtib indicate the extent to which a sidewall is present.
+c
+*         wtime2( 5,k) = wtime()
+c
+c --- rhs: pu, depthu+, utotn+, wgtja
+c --- lhs: wgtja, wgtjb, uja, ujb, dl2u
+c --- rhs: pv, depthv+, vtotn+, wgtia
+c --- lhs: wgtia, wgtib, via, vib, dl2v
+c --- rhs: vtotm, vort+, corio+, dp.m+, dpmx+, vtotn
+c --- lhs: vort, potvor, defor2
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,ia,ib,aspy2,aspx2)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+c ---   assume margin<nblk
+        ja=j-1
+        jb=j+1
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            wgtja(i,j)=max(0.,min(1.,(pu(i,j,k+1)-depthu(i,ja))
+     &                /max(pu(i,j,k+1)-pu(i,j,k),epsil)))
+            wgtjb(i,j)=max(0.,min(1.,(pu(i,j,k+1)-depthu(i,jb))
+     &                /max(pu(i,j,k+1)-pu(i,j,k),epsil)))
+            uja(i,j)=(1.-wgtja(i,j))*utotn(i,ja)+
+     &               wgtja(i,j)*slip*utotn(i,j)
+            ujb(i,j)=(1.-wgtjb(i,j))*utotn(i,jb)+
+     &               wgtjb(i,j)*slip*utotn(i,j)
+c ---       Laplacian of utotn scaled by -0.25*max(scux,scuy)**2
+            aspx2 = aspux(i,j)**2
+            aspy2 = aspuy(i,j)**2
+            dl2u(i,j)=0.5*(aspx2+aspy2)*utotn(i,j)
+     &                   -0.25*aspx2*(utotn(i+1,j)+utotn(i-1,j))
+     &                   -0.25*aspy2*(  uja(i,  j)+  ujb(i,  j))
+c
+*               if     (i.eq.itest .and. j.eq.jtest) then
+*                 write (lp,'(i8,2i4,i3,2x,a,f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'dl2u       =',
+*    .               dl2u(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                ' wgtja,b   =',
+*    .               wgtja(i,j),wgtjb(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'uja        =',
+*    .               uja(i,j),
+*    .               (1.-wgtja(i,j))*utotn(i,ja),
+*    .               wgtja(i,j)*slip*utotn(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'ujb        =',
+*    .               ujb(i,j),
+*    .               (1.-wgtjb(i,j))*utotn(i,jb),
+*    .               wgtjb(i,j)*slip*utotn(i,j)
+*               endif !test
+          enddo !i
+        enddo !l
+c
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+c ---       assume margin<nblk
+            ia=i-1
+            ib=i+1
+            wgtia(i,j)=max(0.,min(1.,(pv(i,j,k+1)-depthv(ia,j))
+     &                /max(pv(i,j,k+1)-pv(i,j,k),epsil)))
+            wgtib(i,j)=max(0.,min(1.,(pv(i,j,k+1)-depthv(ib,j))
+     &                /max(pv(i,j,k+1)-pv(i,j,k),epsil)))
+            via(i,j)=(1.-wgtia(i,j))*vtotn(ia,j)+
+     &                wgtia(i,j)*slip*vtotn(i,j)
+            vib(i,j)=(1.-wgtib(i,j))*vtotn(ib,j)+
+     &                wgtib(i,j)*slip*vtotn(i,j)
+c ---       Laplacian of vtotn scaled by -0.25*max(scvx,scvy)**2
+            aspx2 = aspvx(i,j)**2
+            aspy2 = aspvy(i,j)**2
+            dl2v(i,j)=0.5*(aspx2+aspy2)*vtotn(i,j)
+     &                 -0.25*aspy2*(vtotn(i,j+1)+vtotn(i,j-1))
+     &                 -0.25*aspx2*(  via(i,j  )+  vib(i,j  ))
+          enddo !i
+        enddo !l
+c
+c --- vorticity, pot.vort., defor. at lateral boundary points
+        do l=1,isv(j)
+          i=ifv(j,l)
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            vort(i  ,j)= vtotm(i,j)*(1.-slip)*scvy(i,j)*scq2i(i  ,j)
+            potvor(i  ,j)=(vort(i  ,j)+corio(i  ,j)) * 8.
+     &                     /max(8.*cutoff,
+     &                          4.*(dpo(i,j,k,m)+dpo(i,ja ,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i+1,j))
+            defor2(i  ,j)=(vtotn(i,j)*(1.-slip)*scvy(i,j))**2*
+     &                      scq2i(i  ,j)
+          endif
+          i=ilv(j,l)
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            vort(i+1,j)=-vtotm(i,j)*(1.-slip)*scvy(i,j)*scq2i(i+1,j)
+            potvor(i+1,j)=(vort(i+1,j)+corio(i+1,j)) * 8.
+     &                     /max(8.*cutoff,
+     &                          4.*(dpo(i,j,k,m)+dpo(i,ja ,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i+1,j))
+            defor2(i+1,j)=(vtotn(i,j)*(1.-slip)*scvy(i,j))**2*
+     &                      scq2i(i+1,j)
+          endif
+        enddo !i
+      enddo !l
+!$OMP END PARALLEL DO
+c
+*         wtime2( 6,k) = wtime()
+c
+c --- vorticity, pot.vort., defor. at lateral boundary points
+c
+c --- rhs: utotm, vort+, corio+, dp.m+, dpmx+, utotn
+c --- lhs: vort, potvor, defor2
+c
+*     margin = mbdy - 2
+c
+      do i=1-margin,ii+margin
+c ---   assume margin<nblk
+        ia=i-1
+        do l=1,jsu(i)
+          j=jfu(i,l)
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            vort(i,j  )=-utotm(i,j)*(1.-slip)*scux(i,j)*scq2i(i,j  )
+            potvor(i,j  )=(vort(i,j  )+corio(i,j  )) * 8.
+     &                     /max(8.*cutoff,
+     &                          4.*(dpo(i,j,k,m)+dpo(ia ,j,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i,j+1))
+            defor2(i,j  )=(utotn(i,j)*(1.-slip)*scux(i,j))**2*
+     &                      scq2i(i,j  )
+          endif
+          j=jlu(i,l)
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            vort(i,j+1)= utotm(i,j)*(1.-slip)*scux(i,j)*scq2i(i,j+1)
+            potvor(i,j+1)=(vort(i,j+1)+corio(i,j+1)) * 8.
+     &                     /max(8.*cutoff,
+     &                          4.*(dpo(i,j,k,m)+dpo(ia ,j,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i,j+1))
+            defor2(i,j+1)=(utotn(i,j)*(1.-slip)*scux(i,j))**2*
+     &                      scq2i(i,j+1)
+          endif
+        enddo !l
+      enddo !i
+c
+*         wtime2( 7,k) = wtime()
+c
+c --- rhs: p, utotn+, vtotn+
+c --- lhs: util3, defor1
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            util3(i,j)=0.5*(p(i,j,k+1)+p(i,j,k))*oneta(i,j)
+            defor1(i,j)=((utotn(i+1,j)*scuy(i+1,j)
+     &                   -utotn(i,  j)*scuy(i,  j))
+     &                  -(vtotn(i,j+1)*scvx(i,j+1)
+     &                   -vtotn(i,j  )*scvx(i,j  )))**2
+     &                  *scp2i(i,j)
+          enddo !i
+        enddo !l
+      enddo !j
+c
+c --- vorticity, pot.vort., defor. at interior points (incl. promontories)
+*         wtime2( 8,k) = wtime()
+c
+c --- rhs: vtotm+, utotm+, vort, dp.m+, dpmx+, vib+, via, ujb+, uja
+c --- lhs: vort, potvor, defor2
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isq(j)
+          do i=max(1-margin,ifq(j,l)),min(ii+margin,ilq(j,l))
+            vort(i,j)=(vtotm(i,j)*scvy(i,j)-vtotm(i-1,j)*scvy(i-1,j)
+     &                -utotm(i,j)*scux(i,j)+utotm(i,j-1)*scux(i,j-1))
+     &                *scq2i(i,j)
+            potvor(i,j)=(vort(i,j)+corio(i,j)) * 8.
+     &         /max(8.*cutoff,
+     &              2.*(dpo(i,j  ,k,m)+dpo(i-1,j  ,k,m)+
+     &                  dpo(i,j-1,k,m)+dpo(i-1,j-1,k,m)),
+     &              dpmx(i,j),dpmx(i-1,j),dpmx(i+1,j),
+     &                        dpmx(i,j-1),dpmx(i,j+1))
+            defor2(i,j)=(vib(i-1,j)*scvy(i,j)-via(i,j)*scvy(i-1,j)
+     &                  +ujb(i,j-1)*scux(i,j)-uja(i,j)*scux(i,j-1))**2
+     &                  *scq2i(i,j)
+c
+*               if     ((i.eq.itest .and. j.eq.jtest  ) .or.
+*    .                  (i.eq.itest .and. j.eq.jtest+1)     ) then
+*                 write (lp,'(i8,2i4,i3,2x,a,f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'defor2     =',
+*    .               defor2(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'vib,via    =',
+*    .               vib(i-1,j),via(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,i+i0,j+j0,k,
+*    .                'ujb,uja    =',
+*    .               ujb(i,j-1),uja(i,j)
+*               endif !test
+          enddo !i
+        enddo !l
+      enddo !j
+c
+c --- define auxiliary del2 fields (dl2via,dl2vib,dl2uja,dl2ujb) to imple-
+c --- ment biharmonic sidewall friction along near-vertical bottom slopes.
+c
+*         wtime2( 9,k) = wtime()
+c
+c --- rhs: wgtja, wgtjb, dlu2+, wgtia, wgtib, dlv2+
+c --- lhs: dl2uja, dl2ujb, dl2via, dl2vib
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,ia,ib)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        ja=j-1
+        jb=j+1
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dl2uja(i,j)=(1.-wgtja(i,j))*dl2u(i,ja)+
+     &                  wgtja(i,j)*slip*dl2u(i,j)
+            dl2ujb(i,j)=(1.-wgtjb(i,j))*dl2u(i,jb)+
+     &                  wgtjb(i,j)*slip*dl2u(i,j)
+          enddo !i
+        enddo !l
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            ia=i-1
+            ib=i+1
+            dl2via(i,j)=(1.-wgtia(i,j))*dl2v(ia,j)+
+     &                  wgtia(i,j)*slip*dl2v(i, j)
+            dl2vib(i,j)=(1.-wgtib(i,j))*dl2v(ib,j)+
+     &                  wgtib(i,j)*slip*dl2v(i, j)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+*         wtime2(10,k) = wtime()
+c
+      if     (lpipe .and. lpipe_momtum .and. k.eq.1) then
+c ---   compare two model runs.
+        do j=1,jj
+          do i=1,ii
+            mask(i,j)=min(1,iq(i,j)+iu(i,j  )+iv(i,j  )
+     &                             +iu(i,j-1)+iv(i-1,j))
+          enddo !i
+        enddo !j
+        write (text,'(a9,i3)') 'potvor k=',k
+        call pipe_compare(potvor,mask,text)
+      endif
+c
+c --- ----------
+c --- u equation
+c --- ----------
+c
+c --- deformation-dependent eddy viscosity coefficient
+c
+*         wtime2(11,k) = wtime()
+c
+c --- rhs: defor1+, defor2+
+c --- lhs: vis2u,vis4u
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,deform)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            deform = sqrt(0.5*(defor1(i,j)+defor1(i-1,j)+
+     &                         defor2(i,j)+defor2(i,j+1) ))
+c ---       viscosity terms are not additive, use the maximum
+            vis2u(i,j)=max(veldf2u(i,j),visco2*deform)
+            vis4u(i,j)=max(veldf4u(i,j),visco4*deform)
+c
+*               if     (i.eq.itest .and. j.eq.jtest) then
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'defor1     =',
+*    .               defor1(i,j),defor1(i-1,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'defor2     =',
+*    .               defor2(i,j),defor2(i,j+1)
+*               endif !test
+          enddo !i
+        enddo !l
+      enddo !j
+c
+*         wtime2(12,k) = wtime()
+c
+c --- rhs: vis2u+, vis4u+, dl2u+, dpu.m+, dl2uja, wgtja,, dl2ujb, wgtjb
+c --- lhs: vis2u, vis4u, uflux1, uflux2, uflux3
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,
+!$OMP&                    dpxy,dpja,dpjb,
+!$OMP&                    vis2a,vis4a,vis2b,vis4b,scuya,scuyb)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        ja=j-1
+        jb=j+1
+        do l=1,isu(j)
+          if     (ifu(j,l).gt. 1-nbdy) then
+            vis2u(ifu(j,l)-1,j)=vis2u(ifu(j,l),j)
+            vis4u(ifu(j,l)-1,j)=vis4u(ifu(j,l),j)
+          endif
+          if     (ilu(j,l).lt.ii+nbdy) then
+            vis2u(ilu(j,l)+1,j)=vis2u(ilu(j,l),j)
+            vis4u(ilu(j,l)+1,j)=vis4u(ilu(j,l),j)
+          endif
+c
+c ---     longitudinal turb. momentum flux (at mass points)
+c ---     note that hfharm is 0.5*harmonic mean
+c
+          do i=max(1-margin,ifu(j,l)-1),min(ii+margin,ilu(j,l))
+            uflux1(i,j)=
+     &        ((vis2u(i,j)+vis2u(i+1,j))*(utotn(i,j)-utotn(i+1,j))+
+     &         (vis4u(i,j)+vis4u(i+1,j))*(dl2u( i,j)-dl2u( i+1,j)) )
+     &                   *hfharm(max(dpu(i  ,j,k,m),onemm),
+     &                           max(dpu(i+1,j,k,m),onemm))
+     &                   *scp2(i,j)*2./(scux(i,j)+scux(i+1,j))
+c
+*               if     (i.eq.itest .and. j.eq.jtest) then
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'vis2u      =',
+*    .               vis2u(i,j),vis2u(i+1,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'vis4u      =',
+*    .               vis4u(i,j),vis4u(i+1,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,3f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'dpu        =',
+*    .                      max(dpu(i  ,j,k,m),onemm) *qonem,
+*    .                      max(dpu(i+1,j,k,m),onemm) *qonem,
+*    .               hfharm(max(dpu(i  ,j,k,m),onemm),
+*    .                      max(dpu(i+1,j,k,m),onemm))*qonem
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'utot       =',
+*    .               utotn(i,j),
+*    .               utotn(i,j)-utotn(i+1,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'dl2u       =',
+*    .               dl2u( i,j),
+*    .               dl2u( i,j)-dl2u( i+1,j)
+*               endif !test
+          enddo !i
+c
+c --- lateral turb. momentum flux (at vorticity points)
+c --- (left and right fluxes are evaluated separately because of sidewalls)
+c
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dpxy=max(dpu(i,j ,k,m),onemm)
+            dpja=max(dpu(i,ja,k,m),onemm)
+            dpjb=max(dpu(i,jb,k,m),onemm)
+c
+c --- check whether variables along coast have been initialized correctly
+cdiag      if (k.eq.kk) then
+cdiag        if (iu(i,ja).eq.0 .and. dpu(i,ja,k,m).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag          write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &      '  error - nonzero dpu(ja):',dpu(i,ja,k,m)
+cdiag!$OMP END CRITICAL
+cdiag        endif
+cdiag        if (iu(i,jb).eq.0 .and. dpu(i,jb,k,m).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag          write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &      '  error - nonzero dpu(jb):',dpu(i,jb,k,m)
+cdiag!$OMP END CRITICAL
+cdiag        endif
+cdiag      endif
+c
+            if (iu(i,ja).eq.0) then
+              vis2a=vis2u(i,j )
+              vis4a=vis4u(i,j )
+              scuya=scuy( i,j )
+            else
+              vis2a=vis2u(i,ja)
+              vis4a=vis4u(i,ja)
+              scuya=scuy( i,ja)
+            endif
+            if (iu(i,jb).eq.0) then
+              vis2b=vis2u(i,j )
+              vis4b=vis4u(i,j )
+              scuyb=scuy( i,j )
+            else
+              vis2b=vis2u(i,jb)
+              vis4b=vis4u(i,jb)
+              scuyb=scuy( i,jb)
+            endif
+            uflux2(i,j)=((vis2u(i,j)+vis2a)*(uja(   i,j)-utotn(i,j))+
+     &                   (vis4u(i,j)+vis4a)*(dl2uja(i,j)-dl2u( i,j)) )
+     &                  *hfharm(dpja+wgtja(i,j)*(dpxy-dpja),dpxy)
+     &                  *scq2(i,j )*2./(scuy(i,j)+scuya)
+            uflux3(i,j)=((vis2u(i,j)+vis2b)*(utotn(i,j)-ujb(   i,j))+
+     &                   (vis4u(i,j)+vis4b)*(dl2u( i,j)-dl2ujb(i,j)) )
+     &                  *hfharm(dpjb+wgtjb(i,j)*(dpxy-dpjb),dpxy)
+     &                  *scq2(i,jb)*2./(scuy(i,j)+scuyb)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- pressure force in x direction
+c --- ('scheme 2' from appendix -a- in bleck-smith paper)
+c
+*         wtime2(13,k) = wtime()
+c
+c --- rhs: depthu, pu, montg+, thstar+, p+, dp.m+
+c --- lhs: util1, pgfx
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,dmontg,dthstr,q)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            util1(i,j)=max(0.,min(depthu(i,j)-pu(i,j,k),h1))
+            if     (kapref.ne.-1) then
+              dmontg=montg( i,j,k,1)-montg( i-1,j,k,1)
+              dthstr=thstar(i,j,k,1)-thstar(i-1,j,k,1)
+            else !2 thermobaric reference states
+              q=0.5*(skap(i,j)+skap(i-1,j))
+              dmontg=     q *(montg( i,j,k,1)-montg( i-1,j,k,1))+
+     &               (1.0-q)*(montg( i,j,k,2)-montg( i-1,j,k,2))
+              dthstr=     q *(thstar(i,j,k,1)-thstar(i-1,j,k,1))+
+     &               (1.0-q)*(thstar(i,j,k,2)-thstar(i-1,j,k,2))
+            endif
+            pgfx(i,j)=util1(i,j)*
+     &          ( dmontg+
+     &            dthstr*(p(i,j,k+1)*p(i-1,j,k+1)-
+     &                    p(i,j,k  )*p(i-1,j,k  ))*thref**2
+     &                      /(dp(i,j,k,m)+dp(i-1,j,k,m)+epsil) )
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum .and. k.eq.1) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'pu     k=',k
+        call pipe_compare(pu(1-nbdy,1-nbdy,k),iu,text)
+        write (text,'(a9,i3)') 'depthu k=',k
+        call pipe_compare(depthu,iu,text)
+        write (text,'(a9,i3)') 'util1  k=',k
+        call pipe_compare(util1, iu,text)
+        util4(1:ii,1:jj) = montg( 1:ii,1:jj,k,1)-montg( 0:ii-1,1:jj,k,1)
+        write (text,'(a9,i3)') 'montgX k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = thstar(1:ii,1:jj,k,1)-thstar(0:ii-1,1:jj,k,1)
+        write (text,'(a9,i3)') 'thstaX k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k)*p(0:ii-1,1:jj,k)
+        write (text,'(a9,i3)') 'pSQ    k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k+1)*p(0:ii-1,1:jj,k+1)
+        write (text,'(a9,i3)') 'pSQ    k=',k+1
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = dpo(1:ii,1:jj,k,m)+dpo(0:ii-1,1:jj,k,m)+epsil
+        write (text,'(a9,i3)') 'dp.m+  k=',k
+        call pipe_compare(util4, iu,text)
+        write (text,'(a9,i3)') 'pgfx   k=',k
+        call pipe_compare(pgfx,  iu,text)
+      endif
+c
+*         wtime2(14,k) = wtime()
+c
+c --- rhs: pgfx+, util1+, p+, dpmixl.m+, dpu.m, utotn, drag+
+c --- rhs: stresx, u.m, u.n, dpu.n, gradx, utotm+, vtotm+,
+c --- rhs: vflux+, potvor+, uflux1+, uflux2, uflux3
+c --- lhs: gradx, stress, u.m, u.n
+c
+*     margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,
+!$OMP&                    q,dpun,uhm,uh0,uhp,
+!$OMP&                    ptopl,pbotl,pstres,pbop,qdpu,dragu)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        ja=j-1
+        jb=j+1
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+c
+c --- check whether variables along coast have been initialized correctly
+cdiag       if (k.eq.kk) then
+cdiag         if (iu(i,ja).eq.0 .and. pgfx(i,ja).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero pgfx(ja):',pgfx(i,ja)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag         if (iu(i,jb).eq.0 .and. pgfx(i,jb).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero pgfx(jb):',pgfx(i,jb)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag       endif
+c
+            gradx(i,j)=(pgfx(i,j)+(h1-util1(i,j))*
+     &        (pgfx (i-1,j)+pgfx (i+1,j)+pgfx (i,ja)+pgfx (i,jb))/
+     &        (util1(i-1,j)+util1(i+1,j)+util1(i,ja)+util1(i,jb)+
+     &          epsil))/h1
+c
+            ptopl=min(depthu(i,j),0.5*(p(i,j,k  )+p(i-1,j,k  )))
+            pbotl=min(depthu(i,j),0.5*(p(i,j,k+1)+p(i-1,j,k+1)))
+            if(hybrid .and. mxlkrt) then
+              pstres=0.5*(dpmixl(i,j,m)+dpmixl(i-1,j,m))
+            else
+              pstres=dpu(i,j,1,m)
+            endif
+c
+c ---       top and bottom boundary layer stress
+c ---       drag term is FRAC * Cb * (|v| + c.bar) * onem/dp
+c ---        where FRAC is the fraction of the layer to apply stress too
+c
+            pbop=depthu(i,j)-0.5*(thkbop(i,j)+thkbop(i-1,j)) !top of bot. b.l.
+            qdpu=1.0/max(dpu(i,j,k,m),onemm)
+            dragu=0.5*(drag(i,j)+drag(i-1,j))*qdpu*
+     &                ( max(pbop,    pbotl)
+     &                 -max(pbop,min(ptopl,pbotl-onemm)))
+            if     (drglim.gt.0.0) then
+c             explicit drag: u.t+1 - u.t-1 = - 2dt*dragu*u.t-1
+c                   limiter: 2dt*dragu <= drglim
+              stress(i,j)=-utotn(i,j)*min(dragu,drglim*dt1inv) +
+     &             (stresx(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpu
+            else
+c             implicit drag: u.t+1 - u.t-1 = - 2dt*dragu*u.t+1
+c                                          = - 2dt*dragu / (1+2dt*dragu) * u.t+1
+              stress(i,j)=-utotn(i,j)*dragu/(1.0+delt1*dragu) +
+     &             (stresx(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpu
+            endif
+c
+            if     (tidflg.gt.0 .and. drgscl.ne.0.0) then
+              pbop=depthu(i,j)-0.5*(util6(i,j)+util6(i-1,j)) !top of bot. b.l.
+              dragu=0.5*(util5(i,j)+util5(i-1,j))*
+     &                  ( max(pbop,    pbotl)
+     &                   -max(pbop,min(ptopl,pbotl-onemm)))*qdpu
+              if     (drglim.gt.0.0) then
+                stress(i,j)=stress(i,j)
+     &                      -utotn(i,j)*min(dragu,drglim*dt1inv)
+              else
+                stress(i,j)=stress(i,j)
+     &                      -utotn(i,j)*dragu/(1.0+delt1*dragu)
+              endif
+c ---         !anti-drag on detided velocity (always explicit)
+              stress(i,j)=stress(i,j)
+     &                      +untide(i,j)*min(dragu,adrlim*dt1inv)
+            endif !tidflg
+c
+cdiag       util4(i,j) = u(i,j,k,n)
+            u(i,j,k,n) = utotn(i,j) +
+     &        delt1*(-scuxi(i,j)*(gradx(i,j)
+     &                            +0.25*(utotm(i+1,j  )**2-
+     &                                   utotm(i-1,j  )**2+
+     &                                   vtotm(i  ,j  )**2+
+     &                                   vtotm(i  ,j+1)**2-
+     &                                   vtotm(i-1,j  )**2-
+     &                                   vtotm(i-1,j+1)**2 ))
+     &               +0.125*(vflux(i  ,j)+vflux(i  ,j+1)+
+     &                       vflux(i-1,j)+vflux(i-1,j+1) )
+     &                     *(potvor(i,j)+potvor(i,j+1))
+     &               -ubrhs(i,j)
+     &               +stress(i,j)
+     &               -(uflux1(i,j)-uflux1(i-1,j)+
+     &                 uflux3(i,j)-uflux2(i  ,j) )*qdpu/scu2(i,j) )
+c
+*               if     (i.eq.itest .and. j.eq.jtest) then
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'utotn,new  =',utotn(i,j),u(i,j,k,n)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'gradx,flux =',
+*    .                delt1*(-scuxi(i,j)*(gradx(i,j)
+*    .                            +0.25*(utotm(i+1,j  )**2-
+*    .                                   utotm(i-1,j  )**2+
+*    .                                   vtotm(i  ,j  )**2+
+*    .                                   vtotm(i  ,j+1)**2-
+*    .                                   vtotm(i-1,j  )**2-
+*    .                                   vtotm(i-1,j+1)**2 ))),
+*    .                 delt1*0.125*(vflux(i  ,j)+vflux(i  ,j+1)+
+*    .                              vflux(i-1,j)+vflux(i-1,j+1) )
+*    .                            *(potvor(i,j)+potvor(i,j+1))
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'ubrhs,strs =',
+*    .                -delt1*ubrhs(i,j),
+*    .                 delt1*stress(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'flux       =',
+*    .               -delt1*(uflux1(i,j)-uflux1(i-1,j)+
+*    .                       uflux3(i,j)-uflux2(i  ,j) )
+*    .                     *qdpu/scu2(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'uflux1     =',
+*    .               -delt1*uflux1(i,  j)*qdpu/scu2(i,j),
+*    .                delt1*uflux1(i-1,j)*qdpu/scu2(i,j)
+*                 write (lp,'(i8,2i4,i3,2x,a,2f14.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'uflux3,2   =',
+*    .               -delt1*uflux3(i,j)*qdpu/scu2(i,j),
+*    .                delt1*uflux2(i,j)*qdpu/scu2(i,j)
+*               endif !test
+c
+c ---       Robert-Asselin time filter of -u- field
+c ---       Note that this is smoothing dp * utot,
+c ---        but the filter is not conservative over 3 time levels.
+            dpun = max(0.0,
+     &                 min(depthu(i,j),0.5*(pnkp(i,j)+pnkp(i-1,j)))-
+     &                 min(depthu(i,j),0.5*(pnk0(i,j)+pnk0(i-1,j))) )
+            uhm  = utotn(i,j)*max(dpu(i,j,k,n),dpthin)
+            uh0  = utotm(i,j)*max(dpu(i,j,k,m),dpthin)
+            uhp  = u(i,j,k,n)*max(dpun,        dpthin)
+            q    = 0.5*ra2fac*(uhm + uhp - 2.0*uh0)
+            u(i,j,k,m) = uh0 + q
+            u(i,j,k,n) = uhp
+*               if     (i.eq.itest .and. j.eq.jtest) then
+*                 write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'h,u,h*u.t-1 =',
+*    .                dpu(i,j,k,n)*qonem,
+*    .                uhm/max(dpu(i,j,k,n),dpthin),
+*    .                uhm*qonem
+*                 write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'h,u,h*u.t   =',
+*    .                dpu(i,j,k,m)*qonem,
+*    .                uh0/max(dpu(i,j,k,m),dpthin),
+*    .                uh0*qonem
+*                 write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'h,u,h*u.t+1 =',
+*    .                dpun*qonem,
+*    .                uhp/max(dpun,dpthin),
+*    .                uhp*qonem
+*                 write (lp,'(i8,2i4,i3,2x,a,2f12.5)')
+*    .              nstep,itest+i0,jtest+j0,k,
+*    .                'h*u.t/.t+1=',
+*    .                u(i,j,k,m)*qonem,u(i,j,k,n)*qonem
+*               endif !test
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum .and. k.eq.1) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'vtotm  k=',k
+        call pipe_compare(vtotm, iv,text)
+        write (text,'(a9,i3)') 'utotm  k=',k
+        call pipe_compare(utotm, iu,text)
+        write (text,'(a9,i3)') 'gradx  k=',k
+        call pipe_compare(gradx, iu,text)
+        write (text,'(a9,i3)') 'ubrhs  k=',k
+        call pipe_compare(ubrhs, iu,text)
+        write (text,'(a9,i3)') 'stress k=',k
+        call pipe_compare(stress,iu,text)
+        write (text,'(a9,i3)') 'u.n    k=',k
+        call pipe_compare(u(1-nbdy,1-nbdy,k,n),iu,text)
+      endif
+c
+cdiag if (k.eq.1) then
+cdiag write (lp,100) nstep
+cdiag do j=jtest-1,jtest+1
+cdiag do i=itest-1,itest+1
+cdiag write (lp,'(2i5,i3,8f8.3)') i,j,k,
+cdiag.  util4(i,j),u(i,j,k,n),-delt1*gradx(i,j)*scuxi(i,j),
+cdiag.  -delt1*
+cdiag. 0.25*(utotm(i+1,j)**2+vtotm(i  ,j)**2+vtotm(i  ,j+1)**2
+cdiag.      -utotm(i-1,j)**2-vtotm(i-1,j)**2-vtotm(i-1,j+1)**2)*
+cdiag.       scuxi(i,j),
+cdiag.   delt1*(vflux(i  ,j)+vflux(i  ,j+1)+vflux(i-1,j)+vflux(i-1,j+1))
+cdiag.        *(potvor(i,j)+potvor(i,j+1))*.125,
+cdiag.  -delt1*ubrhs(i,j),delt1*stress(i,j),
+cdiag.  -delt1*(uflux1(i,j)-uflux1(i-1,j)
+cdiag.         +uflux3(i,j)-uflux2(i,j))/
+cdiag.         (scu2(i,j)*max(dpu(i,j,k,m),onemm))
+cdiag enddo !i
+cdiag enddo !j
+cdiag endif
+ 100    format(i9,8x,'uold    unew   gradp  nonlin   corio',
+     &3x,'ubrhs  stress    fric')
+c
+c --- ----------
+c --- v equation
+c --- ----------
+c
+c --- deformation-dependent eddy viscosity coefficient
+c
+*         wtime2(15,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i,deform)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            deform = sqrt(0.5*(defor1(i,j)+defor1(i,j-1)+
+     &                         defor2(i,j)+defor2(i+1,j) ))
+c ---       viscosity terms are not additive, use the maximum
+            vis2v(i,j)=max(veldf2v(i,j),visco2*deform)
+            vis4v(i,j)=max(veldf4v(i,j),visco4*deform)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+*         wtime2(16,k) = wtime()
+      do i=1-margin,ii+margin
+        do l=1,jsv(i)
+          if     (jfv(i,l).gt. 1-nbdy) then
+            vis2v(i,jfv(i,l)-1)=vis2v(i,jfv(i,l))
+            vis4v(i,jfv(i,l)-1)=vis4v(i,jfv(i,l))
+          endif
+          if     (jlv(i,l).lt.jj+nbdy) then
+            vis2v(i,jlv(i,l)+1)=vis2v(i,jlv(i,l))
+            vis4v(i,jlv(i,l)+1)=vis4v(i,jlv(i,l))
+          endif
+        enddo !l
+      enddo !i
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,ia,ib,
+!$OMP&                    dpxy,dpia,dpib,
+!$OMP&                    vis2a,vis4a,vis2b,vis4b,scvxa,scvxb)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+c
+c ---   longitudinal turb. momentum flux (at mass points)
+c ---   note that hfharm is 0.5*harmonic mean
+c
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            if     (iv(i,j)+iv(i,j+1).gt.0) then
+            vflux1(i,j)=
+     &        ((vis2v(i,j)+vis2v(i,j+1))*(vtotn(i,j)-vtotn(i,j+1))+
+     &         (vis4v(i,j)+vis4v(i,j+1))*(dl2v( i,j)-dl2v( i,j+1)) )
+     &                   *hfharm(max(dpv(i,j  ,k,m),onemm),
+     &                           max(dpv(i,j+1,k,m),onemm))
+     &                   *scp2(i,j)*2./(scvy(i,j)+scvy(i,j+1))
+            endif
+          enddo !i
+        enddo !l
+c
+c ---   lateral turb. momentum flux (at vorticity points)
+c ---   (left and right fluxes are evaluated separately because of sidewalls)
+c
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            ia=i-1
+            ib=i+1
+            dpxy=max(dpv(i ,j,k,m),onemm)
+            dpia=max(dpv(ia,j,k,m),onemm)
+            dpib=max(dpv(ib,j,k,m),onemm)
+c
+c --- check whether variables along coast have been initialized correctly
+cdiag       if (k.eq.kk) then
+cdiag         if (iv(ia,j).eq.0 .and. dpv(ia,j,k,m).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero dpv(ia):',dpv(ia,j,k,m)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag         if (iv(ib,j).eq.0 .and. dpv(ib,j,k,m).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero dpv(ib):',dpv(ib,j,k,m)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag       endif
+            if (iv(ia,j).eq.0) then
+              vis2a=vis2v(i ,j)
+              vis4a=vis4v(i ,j)
+              scvxa=scvx( i, j)
+            else
+              vis2a=vis2v(ia,j)
+              vis4a=vis4v(ia,j)
+              scvxa=scvx( ia,j)
+            endif
+            if (iv(ib,j).eq.0) then
+              vis2b=vis2v(i ,j)
+              vis4b=vis4v(i ,j)
+              scvxb=scvx( i, j)
+            else
+              vis2b=vis2v(ib,j)
+              vis4b=vis4v(ib,j)
+              scvxb=scvx( ib,j)
+            endif
+            vflux2(i,j)=((vis2v(i,j)+vis2a)*(via(   i,j)-vtotn(i,j))+
+     &                   (vis4v(i,j)+vis4a)*(dl2via(i,j)-dl2v( i,j)) )
+     &                  *hfharm(dpia+wgtia(i,j)*(dpxy-dpia),dpxy)
+     &                  *scq2(i ,j)*2./(scvx(i,j)+scvxa)
+            vflux3(i,j)=((vis2v(i,j)+vis2b)*(vtotn(i,j)-vib(   i,j))+
+     &                   (vis4v(i,j)+vis4b)*(dl2v( i,j)-dl2vib(i,j)) )
+     &                  *hfharm(dpib+wgtib(i,j)*(dpxy-dpib),dpxy)
+     &                  *scq2(ib,j)*2./(scvx(i,j)+scvxb)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- pressure force in y direction
+c --- ('scheme 2' from appendix -a- in bleck-smith paper)
+c
+*         wtime2(17,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i,dmontg,dthstr,q)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            util2(i,j)=max(0.,min(depthv(i,j)-pv(i,j,k),h1))
+            if     (kapref.ne.-1) then
+              dmontg=montg( i,j,k,1)-montg( i,j-1,k,1)
+              dthstr=thstar(i,j,k,1)-thstar(i,j-1,k,1)
+            else !2 thermobaric reference states
+              q=0.5*(skap(i,j)+skap(i,j-1))
+              dmontg=     q *(montg( i,j,k,1)-montg( i,j-1,k,1))+
+     &               (1.0-q)*(montg( i,j,k,2)-montg( i,j-1,k,2))
+              dthstr=     q *(thstar(i,j,k,1)-thstar(i,j-1,k,1))+
+     &               (1.0-q)*(thstar(i,j,k,2)-thstar(i,j-1,k,2))
+            endif
+            pgfy(i,j)=util2(i,j)*
+     &          ( dmontg+
+     &            dthstr*(p(i,j,k+1)*p(i,j-1,k+1)-
+     &                    p(i,j,k  )*p(i,j-1,k  ))*thref**2
+     &                      /(dp(i,j,k,m)+dp(i,j-1,k,m)+epsil) )
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum .and. k.eq.1) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'pv     k=',k
+        call pipe_compare(pv(1-nbdy,1-nbdy,k),iv,text)
+        write (text,'(a9,i3)') 'depthv k=',k
+        call pipe_compare(depthv,iv,text)
+        write (text,'(a9,i3)') 'util2  k=',k
+        call pipe_compare(util2, iv,text)
+        util4(1:ii,1:jj) = montg( 1:ii,1:jj,k,1)-montg( 1:ii,0:jj-1,k,1)
+        write (text,'(a9,i3)') 'montgY k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = thstar(1:ii,1:jj,k,1)-thstar(1:ii,0:jj-1,k,1)
+        write (text,'(a9,i3)') 'thstaY k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k)  *p(1:ii,0:jj-1,k)
+        write (text,'(a9,i3)') 'pSQ    k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k+1)*p(1:ii,0:jj-1,k+1)
+        write (text,'(a9,i3)') 'pSQ    k=',k+1
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = dp(1:ii,1:jj,k,m)+dp(1:ii,0:jj-1,k,m)+epsil
+        write (text,'(a9,i3)') 'dp.m+  k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'pgfy   k=',k
+        call pipe_compare(pgfy,  iv,text)
+      endif
+c
+*         wtime2(18,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i,ia,ib)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            ia=i-1
+            ib=i+1
+c
+c --- check whether variables along coast have been initialized correctly
+cdiag       if (k.eq.kk) then
+cdiag         if (iv(ia,j).eq.0 .and. pgfy(ia,j).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero pgfy(ia):',pgfy(ia,j)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag         if (iv(ib,j).eq.0 .and. pgfy(ib,j).ne.0.) then
+cdiag!$OMP CRITICAL
+cdiag           write(lp,'(i9,2i5,a,1p,2e9.1)') nstep,i,j,
+cdiag     &       '  error - nonzero pgfy(ib):',pgfy(ib,j)
+cdiag!$OMP END CRITICAL
+cdiag         endif
+cdiag       endif
+c
+            grady(i,j)=(pgfy(i,j)+(h1-util2(i,j))*
+     &        (pgfy (ia ,j)+pgfy (ib ,j)
+     &        +pgfy (i,j-1)+pgfy (i,j+1))/
+     &        (util2(ia ,j)+util2(ib ,j)
+     &        +util2(i,j-1)+util2(i,j+1)+epsil))/h1
+          enddo !i
+        enddo !l
+      enddo !j
+c
+*         wtime2(19,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i,
+!$OMP&                    q,dpvn,vhm,vh0,vhp,
+!$OMP&                    ptopl,pbotl,pstres,pbop,qdpv,dragv)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+c
+            ptopl=min(depthv(i,j),0.5*(p(i,j,k  )+p(i,j-1,k  )))
+            pbotl=min(depthv(i,j),0.5*(p(i,j,k+1)+p(i,j-1,k+1)))
+            if(hybrid .and. mxlkrt) then
+              pstres=0.5*(dpmixl(i,j,m)+dpmixl(i,j-1,m))
+            else
+              pstres=dpv(i,j,1,m)
+            endif
+c
+c ---       top and bottom boundary layer stress
+c ---       bottom drag term is FRAC * Cb * (|v| + c.bar) * onem/dp
+c ---        where FRAC is the fraction of the layer to apply drag too
+c
+            pbop=depthv(i,j)-0.5*(thkbop(i,j)+thkbop(i,j-1))  !top of bot. b.l.
+            qdpv=1.0/max(dpv(i,j,k,m),onemm)
+            dragv=0.5*(drag(i,j)+drag(i,j-1))*qdpv*
+     &                ( max(pbop,    pbotl)
+     &                 -max(pbop,min(ptopl,pbotl-onemm)))
+            if     (drglim.gt.0.0) then
+              stress(i,j)=-vtotn(i,j)*min(dragv,drglim*dt1inv) +
+     &             (stresy(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpv
+            else
+              stress(i,j)=-vtotn(i,j)*dragv/(1.0+delt1*dragv) +
+     &             (stresy(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpv
+            endif
+c
+            if     (tidflg.gt.0 .and. drgscl.ne.0.0) then
+              pbop=depthv(i,j)-0.5*(util6(i,j)+util6(i,j-1))  !top of bot. b.l.
+              dragv=0.5*(util5(i,j)+util5(i,j-1))*
+     &                  ( max(pbop,    pbotl)
+     &                   -max(pbop,min(ptopl,pbotl-onemm)))*qdpv
+              if     (drglim.gt.0.0) then
+                stress(i,j)=stress(i,j)
+     &                      -vtotn(i,j)*min(dragv,drglim*dt1inv)
+              else
+                stress(i,j)=stress(i,j)
+     &                      -vtotn(i,j)*dragv/(1.0+delt1*dragv)
+              endif
+c ---         !anti-drag on detided velocity (always explicit)
+              stress(i,j)=stress(i,j)
+     &                      +vntide(i,j)*min(dragv,adrlim*dt1inv)
+            endif !tidflg
+c
+cdiag       util4(i,j) = v(i,j,k,n)
+            v(i,j,k,n) = vtotn(i,j) +
+     &        delt1*(-scvyi(i,j)*(grady(i,j)
+     &                            +0.25*(vtotm(i,  j+1)**2-
+     &                                   vtotm(i,  j-1)**2+
+     &                                   utotm(i,  j  )**2+
+     &                                   utotm(i+1,j  )**2-
+     &                                   utotm(i,  j-1)**2-
+     &                                   utotm(i+1,j-1)**2 ))
+     &               -0.125*(uflux(i,  j  )+uflux(i+1,j  )+
+     &                       uflux(i,  j-1)+uflux(i+1,j-1) )
+     &                     *(potvor(i,j)+potvor(i+1,j))
+     &               -vbrhs(i,j)
+     &               +stress(i,j)
+     &               -(vflux1(i,j)-vflux1(i,j-1)+
+     &                 vflux3(i,j)-vflux2(i,j  ) )*qdpv/scv2(i,j) )
+c
+c ---       Robert-Asselin time filter of -v- field
+c ---       Note that this is smoothing dp * vtot,
+c ---        but the filter is not conservative over 3 time levels.
+            dpvn = max(0.0,
+     &                 min(depthv(i,j),0.5*(pnkp(i,j)+pnkp(i,j-1)))-
+     &                 min(depthv(i,j),0.5*(pnk0(i,j)+pnk0(i,j-1))) )
+            vhm  = vtotn(i,j)*max(dpv(i,j,k,n),dpthin)
+            vh0  = vtotm(i,j)*max(dpv(i,j,k,m),dpthin)
+            vhp  = v(i,j,k,n)*max(dpvn,        dpthin)
+            q    = 0.5*ra2fac*(vhm + vhp - 2.0*vh0)
+            v(i,j,k,m) = vh0 + q
+            v(i,j,k,n) = vhp
+          enddo !i
+        enddo !l
+      enddo !j
+c
+*     if     (lpipe .and. lpipe_momtum .and. k.eq.1) then
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        util4(1:ii,1:jj) =  vtotm(1:ii,  2:jj+1)**2
+     &                     +utotm(1:ii,  1:jj  )**2
+     &                     +utotm(2:ii+1,1:jj  )**2
+     &                     -vtotm(1:ii,  0:jj-1)**2
+     &                     -utotm(1:ii,  0:jj-1)**2
+     &                     -utotm(2:ii+1,0:jj-1)**2
+        write (text,'(a9,i3)') 'totm   k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'grady  k=',k
+        call pipe_compare(grady, iv,text)
+        write (text,'(a9,i3)') 'vbrhs  k=',k
+        call pipe_compare(vbrhs, iv,text)
+        if     (k.eq.kk) then
+          write (text,'(a9,i3)') 'p      k=',k-1
+          call pipe_compare(p(1-nbdy,1-nbdy,k-1),ip,text)
+          write (text,'(a9,i3)') 'p      k=',k
+          call pipe_compare(p(1-nbdy,1-nbdy,k)  ,ip,text)
+          write (text,'(a9,i3)') 'drag   k=',k
+          call pipe_compare(drag,ip,text)
+        endif
+        write (text,'(a9,i3)') 'stress k=',k
+        call pipe_compare(stress,iv,text)
+        util4(1:ii,1:jj) =  uflux(1:ii,  1:jj  )
+     &                     +uflux(2:ii+1,1:jj  )
+     &                     +uflux(1:ii,  0:jj-1)
+     &                     +uflux(2:ii+1,0:jj-1)
+        write (text,'(a9,i3)') 'uflux  k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) =  potvor(1:ii,  1:jj  )
+     &                     +potvor(2:ii+1,1:jj  )
+        write (text,'(a9,i3)') 'potvor k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) =  vflux1(1:ii,  1:jj  )
+     &                     -vflux1(1:ii,  0:jj-1)
+     &                     +vflux3(1:ii,  1:jj  )
+     &                     -vflux2(1:ii,  1:jj  )
+        write (text,'(a9,i3)') 'vflux  k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'v.n    k=',k
+        call pipe_compare(v(1-nbdy,1-nbdy,k,n),iv,text)
+      endif
+c
+cdiag if (k.eq.1) then
+cdiag write (lp,101) nstep
+cdiag do j=jtest-1,jtest+1
+cdiag do i=itest-1,itest+1
+cdiag write (lp,'(2i5,i3,8f8.3)') i,j,k,
+cdiag.  util4(i,j),v(i,j,k,n),-delt1*grady(i,j)*scvyi(i,j),
+cdiag.  -delt1*
+cdiag. 0.25*(vtotm(i,j+1)**2+utotm(i,j  )**2+utotm(i+1,j  )**2
+cdiag.      -vtotm(i,j-1)**2-utotm(i,j-1)**2-utotm(i+1,j-1)**2)*
+cdiag.       scvyi(i,j),
+cdiag.  -delt1*(uflux(i,j  )+uflux(i+1,j  )+uflux(i,j-1)+uflux(i+1,j-1))
+cdiag.        *(potvor(i,j)+potvor(i+1,j))*.125,
+cdiag.  -delt1*vbrhs(i,j),delt1*stress(i,j),
+cdiag.  -delt1*(vflux1(i,j)-vflux1(i,j-1)
+cdiag.         +vflux3(i,j)-vflux2(i,j))/
+cdiag.         (scv2(i,j)*max(dpv(i,j,k,m),onemm))
+cdiag enddo !i
+cdiag enddo !j
+cdiag endif
+ 101    format(i9,8x,'vold    vnew   gradp  nonlin   corio',
+     &3x,'vbrhs  stress    fric')
+c
+*         wtime2(20,k) = wtime()
+ 9    continue  ! k=1,kk
+c
+c --- update dpu.m,dpv.m to time level t   with RA time smoother
+c --- update dpu.n,dpv.n to time level t+1
+c
+      margin = 1
+c
+*        wtime1( 7) = wtime()
+c --- p is from dp.m, see momtum_hs
+      call dpudpv(dpu(1-nbdy,1-nbdy,1,m),
+     &            dpv(1-nbdy,1-nbdy,1,m),
+     &            p,depthu,depthv, max(0,margin-1))
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k)
+!$OMP&           SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            do k=1,kk
+              p(i,j,k+1) = p(i,j,k) + dp(i,j,k,n)
+            enddo !k
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      call dpudpv(dpu(1-nbdy,1-nbdy,1,n),
+     &            dpv(1-nbdy,1-nbdy,1,n),
+     &            p,depthu,depthv, max(0,margin-1))
+c
+c --- convert from dpv*vtot to vtot to v
+c --- substitute depth-weighted averages at massless grid points.
+c --- extract barotropic velocities generated during most recent 
+c --- baroclinic time step and use them to force barotropic flow field.
+c
+      margin = 0
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k,q,sum_m,sum_n)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            k=1
+              u(i,j,k,m) = u(i,j,k,m)/max(dpu(i,j,k,m),dpthin)
+              u(i,j,k,n) = u(i,j,k,n)/max(dpu(i,j,k,n),dpthin)
+              sum_m      = u(i,j,k,m)*    dpu(i,j,k,m)
+              sum_n      = u(i,j,k,n)*    dpu(i,j,k,n)
+*                 if     (i.eq.itest .and. j.eq.jtest) then
+*                   write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .                nstep,itest+i0,jtest+j0,k,
+*    .                  'h,h*u,u.t   =',
+*    .                  dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,m)*dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,m)
+*                   write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .                nstep,itest+i0,jtest+j0,k,
+*    .                  'h,h*u,u.t+1 =',
+*    .                  dpu(i,j,k,n)*qonem,
+*    .                  u(i,j,k,n)*dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,n)
+*                 endif !test
+            do k=2,kk
+              u(i,j,k,m) = u(i,j,k,m)/max(dpu(i,j,k,m),dpthin)
+              q          = min(dpu(i,j,k,m),cutoff)
+              u(i,j,k,m) = (u(i,j,k,m)*q+u(i,j,k-1,m)*(cutoff-q))*
+     &                     qcutoff
+              u(i,j,k,n) = u(i,j,k,n)/max(dpu(i,j,k,n),dpthin)
+              q          = min(dpu(i,j,k,n),cutoff)
+              u(i,j,k,n) = (u(i,j,k,n)*q+u(i,j,k-1,n)*(cutoff-q))*
+     &                     qcutoff
+              sum_m      = sum_m + u(i,j,k,m)*dpu(i,j,k,m)
+              sum_n      = sum_n + u(i,j,k,n)*dpu(i,j,k,n)
+*                 if     (i.eq.itest .and. j.eq.jtest) then
+*                   write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .                nstep,itest+i0,jtest+j0,k,
+*    .                  'h,h*u,u.t   =',
+*    .                  dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,m)*dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,m)
+*                   write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .                nstep,itest+i0,jtest+j0,k,
+*    .                  'h,h*u,u.t+1 =',
+*    .                  dpu(i,j,k,n)*qonem,
+*    .                  u(i,j,k,n)*dpu(i,j,k,m)*qonem,
+*    .                  u(i,j,k,n)
+*                 endif !test
+            enddo !k
+c
+            sum_m = sum_m/depthu(i,j)
+            sum_n = sum_n/depthu(i,j)
+            do k=1,kk
+              u(i,j,k,m) = u(i,j,k,m) - sum_m
+              u(i,j,k,n) = u(i,j,k,n) - sum_n
+*                 if     (i.eq.itest .and. j.eq.jtest) then
+*                   write (lp,'(i8,2i4,i3,2x,a,3f12.5)')
+*    .                nstep,itest+i0,jtest+j0,k,
+*    .                  'u.t+1 =',
+*    .                  u(i,j,k,n)+sum_n,
+*    .                  u(i,j,k,n)
+*                 endif !test
+            enddo !k
+c
+            utotn(i,j) = dt1inv*(sum_n - ubavg(i,j,n))  !for barotp
+          enddo !i
+        enddo !l
+c         
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            k=1
+              v(i,j,k,m) = v(i,j,k,m)/max(dpv(i,j,k,m),dpthin)
+              v(i,j,k,n) = v(i,j,k,n)/max(dpv(i,j,k,n),dpthin)
+              sum_m      = v(i,j,1,m)*    dpv(i,j,1,m)
+              sum_n      = v(i,j,1,n)*    dpv(i,j,1,n)
+            do k=2,kk
+              v(i,j,k,m) = v(i,j,k,m)/max(dpv(i,j,k,m),dpthin)
+              q          = min(dpv(i,j,k,m),cutoff)
+              v(i,j,k,m) = (v(i,j,k,m)*q+v(i,j,k-1,m)*(cutoff-q))*
+     &                     qcutoff
+              v(i,j,k,n) = v(i,j,k,n)/max(dpv(i,j,k,n),dpthin)
+              q          = min(dpv(i,j,k,n),cutoff)
+              v(i,j,k,n) = (v(i,j,k,n)*q+v(i,j,k-1,n)*(cutoff-q))*
+     &                     qcutoff
+              sum_m      = sum_m + v(i,j,k,m)*dpv(i,j,k,m)
+              sum_n      = sum_n + v(i,j,k,n)*dpv(i,j,k,n)
+            enddo !k
+c
+            sum_m = sum_m/depthv(i,j)
+            sum_n = sum_n/depthv(i,j)
+            do k=1,kk
+              v(i,j,k,m) = v(i,j,k,m) - sum_m
+              v(i,j,k,n) = v(i,j,k,n) - sum_n
+            enddo !k
+c
+            vtotn(i,j) = dt1inv*(sum_n - vbavg(i,j,n))  !for barotp
+          enddo !i
+        enddo !l
+      enddo !j - do 30 loop
+!$OMP END PARALLEL DO
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        do k= 1,kk
+          write (text,'(a9,i3)') 'dpv.m  k=',k
+          call pipe_compare(dpv(1-nbdy,1-nbdy,k,m),iv,text)
+          write (text,'(a9,i3)') 'dpv.n  k=',k
+          call pipe_compare(dpv(1-nbdy,1-nbdy,k,n),iv,text)
+          write (text,'(a9,i3)') 'v.n(2) k=',k
+          call pipe_compare(  v(1-nbdy,1-nbdy,k,n),iv,text)
+        enddo !k
+        write (text,'(a9,i3)') 'vtotn  k=',kk
+        call pipe_compare(vtotn, iv,text)
+      endif
+*
+*        wtime1(10) = wtime()
+*        if     (mod(nstep,100).eq.0) then
+* ---      timer printout.
+*          do i= 2,10
+*            write(lp,'(4x,a,i3,a,f9.5,a)')
+*    &        'momtum   section',i,' time =',
+*    &        wtime1(i) - wtime1(i-1),' seconds'
+*          enddo !i
+*          do i= 2,20
+*            wtimes=0.0
+*            do k=1,kk
+*              wtimes = wtimes + (wtime2(i,k)-wtime2(i-1,k))
+*            enddo !k
+*            write(lp,'(4x,a,i3,a,f9.5,a)')
+*    &        'momtum k section',i,' time =',
+*    &        wtimes,' seconds'
+*          enddo !i
+*          call flush(lp)
+*        endif
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'v.n(3) k=',1
+        call pipe_compare(v(1-nbdy,1-nbdy,1,n),iv,text)
+      endif
+c
+      return
+      end
+c
+      subroutine momtum4(m,n)
+      use mod_xc    ! HYCOM communication interface
+      use mod_pipe  ! HYCOM debugging interface
+      use mod_tides ! HYCOM tides
+      implicit none
+c
+      include 'common_blocks.h'
+c
+      integer m,n
+c
+c --- ---------------------------------------------------------
+c --- momentum equations (4th order version)
+c
+c --- Winther, N.G., Y.G. Morel, G. Evensen (2007)
+c --- Efficiency of high order numerical schemes
+c --- for momentum advection.
+c --- Journal of Marine Systems 67 (2007) 31-46
+c
+c --- diffusion is biharmonic with speed dependent and
+c --- deformation dependent coefficients.
+c
+c --- hydrostatic equation and surface stress via momtum_hs
+c --- ---------------------------------------------------------
+c --- on entry:
+c ---  saln(:,:,:,m) = time step t   with RA time smoothing
+c ---  saln(:,:,:,n) = time step t+1
+c
+c ---    dp(:,:,:,m) = time step t   with RA time smoothing
+c ---    dp(:,:,:,n) = time step t+1
+c
+c ---   dpo(:,:,:,n) = time step t-1
+c ---   dpo(:,:,:,m) = time step t
+c
+c ---   dpv(:,:,:,n) = time step t-1
+c ---   dpv(:,:,:,m) = time step t
+c ---   dpu(:,:,:,n) = time step t-1
+c ---   dpu(:,:,:,m) = time step t
+c
+c ---     v(:,:,:,n) = time step t-1
+c ---     v(:,:,:,m) = time step t
+c ---     u(:,:,:,n) = time step t-1
+c ---     u(:,:,:,m) = time step t
+c
+c --- on exit:
+c ---   dpv(:,:,:,m) = time step t   with RA time smoothing
+c ---   dpv(:,:,:,n) = time step t+1
+c ---   dpu(:,:,:,m) = time step t   with RA time smoothing
+c ---   dpu(:,:,:,n) = time step t+1
+c
+c ---     v(:,:,:,m) = time step t   with RA time smoothing
+c ---     v(:,:,:,n) = time step t+1
+c ---     u(:,:,:,m) = time step t   with RA time smoothing
+c ---     u(:,:,:,n) = time step t+1
+c
+c --- vtotn(:,:)     = time step t-1 to t+1 barotropic tendency
+c --- utotn(:,:)     = time step t-1 to t+1 barotropic tendency
+c --- ---------------------------------------------------------
+c
+      logical, parameter :: lpipe_momtum=.false.  !usually .false.
+      integer, parameter :: ijmax=max(idm,jdm)    !for 1-d arrays
+c
+      real, dimension (1-nbdy:idm+nbdy,1-nbdy:jdm+nbdy) ::
+     &                 stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 scuyi,scvxi,cflp,viscp,viscq,
+     &                 advu,diffu,advv,diffv,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,  !not used
+     &                 pnk0,pnkp
+      common/momtumr4/ stress,stresx,stresy,dpmx,thkbop,oneta,
+     &                 scuyi,scvxi,cflp,viscp,viscq,
+     &                 advu,diffu,advv,diffv,
+     &                 dl2u,dl2uja,dl2ujb,dl2v,dl2via,dl2vib,  !not used
+     &                 pnk0,pnkp
+      save  /momtumr4/
+c
+      real, dimension (1-nbdy:ijmax+nbdy) ::
+     &       uwim,uwin,vwim,vwin, !not saved, OMP private
+     &       dun,dum,dvn,dvm      !not saved, OMP private
+      real, dimension (-2:2) ::
+     &       uwjm,uwjn,vwjm,vwjn  !not saved, OMP private
+c
+      integer i,ia,ib,im1,ip1,
+     &        j,ja,jb,jm1,jp1,k,ka,l,mbdy
+c
+      real    vmag,dall,adrlim,ptopl,pbotl,cutoff,qcutoff,h1,q,
+     &        dt1inv,phi,plo,pbop,pthkbl,ubot,vbot,pstres,
+     &        dmontg,dthstr,dragu,dragv,qdpu,qdpv,dpthin,
+     &        dpun,uhm,uh0,uhp,dpvn,vhm,vh0,vhp,sum_m,sum_n,
+     &        scpmin,scpasp
+c
+      real    utotja,utotjb,vtotia,vtotib,wia,wib,wja,wjb
+      real    clpn,clmn,crpn,crmn,clpm,crmm
+      real    upij,vpij,velmodul,defortot
+      real    ulimmax,hmindiff
+      real    q12
+c
+*     real*8    wtime
+*     external  wtime
+*     real*8    wtime1(10),wtime2(20,kdm),wtimes
+c
+      character text*12
+      integer, save, dimension (1-nbdy:idm+nbdy,1-nbdy:jdm+nbdy) ::
+     & mask
+c
+      integer ifirst
+      save    ifirst
+c
+*     include 'stmt_fns.h'
+c
+      data ifirst / 0 /
+c
+      mbdy = 6
+c
+      call xctilr(dpu(  1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_us)
+      call xctilr(dpv(  1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_vs)
+      call xctilr(u(    1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_uv)
+      call xctilr(v(    1-nbdy,1-nbdy,1,1),1,2*kk, 6,6, halo_vv)
+      call xctilr(ubavg(1-nbdy,1-nbdy,1  ),1,   2, 6,6, halo_uv)
+      call xctilr(vbavg(1-nbdy,1-nbdy,1  ),1,   2, 6,6, halo_vv)
+c
+      if     (ifirst.eq.0) then
+        ifirst=1
+        margin = mbdy
+c
+!$OMP PARALLEL DO PRIVATE(j,i,scpmin,scpasp)
+!$OMP&         SCHEDULE(STATIC,jblk)
+        do j=1-margin,jj+margin
+          do i=1-margin,ii+margin
+            pu(i,j,1) = 0.0
+            pv(i,j,1) = 0.0
+c
+            viscp(i,j) = 0.0
+            viscq(i,j) = 0.0
+c
+            scuyi(i,j) = 1.0/scuy(i,j)
+            scvxi(i,j) = 1.0/scvx(i,j)
+c
+c ---       CFL constraint on 2D explicit biharmonic viscosity, on p-grid
+c ---       CFL limit on B is DX^4/32DT, use 75% of this value
+c ---       where DX=min(dx,dy) and max(dx,dy) is used for calculating B
+            scpmin = min(scpx(i,j),scpy(i,j))
+            scpasp = scpmin / max(scpx(i,j),scpy(i,j),epsil)  !<=1
+            cflp(i,j) = (0.75/(32.0*delt1)) * scpmin * scpasp**3
+          enddo !i
+        enddo !j
+      endif !ifirst
+c
+c ---------------------------------
+c     First initialize fields
+c ---------------------------------
+c
+      dpthin  = 0.001*onemm
+      hmindiff=       tenm
+      h1      =       tenm  !used in lateral weighting of hor.pres.grad.
+      cutoff  =   0.5*onem
+      qcutoff = 1.0/cutoff
+      q12     = 1.0/12.0
+c
+c --- ---------------------------------------
+c --- hydrostatic equation and surface stress
+c --- ---------------------------------------
+c
+      call momtum_hs(m,n)
+c
+c +++ ++++++++++++++++++
+c +++ momentum equations
+c +++ ++++++++++++++++++
+c
+*        wtime1( 4) = wtime()
+c
+c --- rhs: p, u.n+, v.n+, ubavg.n+, vbavg.n+, depthv+, pvtrop+
+c --- rhs: dpmixl.m+, taux+, dpu, depthu+, dpv, tauy+
+c --- lhs: util1, util2, drag, ubrhs, stresx, vbrhs, stresy
+c
+      if     (drglim.gt.0.0) then
+        adrlim = drglim
+      else
+        adrlim = 0.125
+      endif
+      dt1inv = 1./delt1
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k,
+!$OMP&                    phi,plo,pbop,ubot,vbot,vmag,dall,pstres)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+c     
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+c
+c ---       bottom drag (standard bulk formula)
+c ---       bottom stress is applied over thickness thkbot (or the
+c ---        total depth is this is less)
+c
+            thkbop(i,j)=min( thkbot*onem, p(i,j,kk+1) )
+c
+c ---       the bottom stress term is estimated using velocity averaged
+c ---       over the bottom boundary layer. this thickness is dpbbl for
+c ---       the kpp boundary layer; otherwise, it is thkbop
+c
+            ubot=0.0
+            vbot=0.0
+            if (mxlkpp .and. bblkpp) then
+              pthkbl=max(dpbbl(i,j),thkbop(i,j))  !thknss of bot. b.l.
+            else
+              pthkbl=thkbop(i,j)                  !thknss of bot. b.l.
+            endif
+            pbop=p(i,j,kk+1)-pthkbl               !top of bot. b.l.
+            phi =max(p(i,j,1),pbop)
+            do k=1,kk
+              plo =phi  ! max(p(i,j,k),pbop)
+              phi =max(p(i,j,k+1),pbop)
+              ubot=ubot + (u(i,j,k,n)+u(i+1,j,k,n))*(phi-plo)
+              vbot=vbot + (v(i,j,k,n)+v(i,j+1,k,n))*(phi-plo)
+            enddo !k
+            ubot=ubot/min(pthkbl,p(i,j,kk+1))
+     &            + (ubavg(i,j,n)+ubavg(i+1,j,n))
+            vbot=vbot/min(pthkbl,p(i,j,kk+1))
+     &            + (vbavg(i,j,n)+vbavg(i,j+1,n))
+c
+c ---       drag = Cb * (|v| + c.bar)
+c ---       include 1/thkbop for the fraction of layer calculation
+c ---        and onem for conversion from 1/dp to 1/h
+c
+            vmag=0.5*sqrt(ubot**2+vbot**2)
+            dall=cbp(i,j)*(vmag+cbarp(i,j))  !no tidal drag
+            drag(i,j)=dall*onem/thkbop(i,j)
+            if (mxlkpp .and. bblkpp) then
+              ustarb(i,j)=sqrt(dall*vmag)
+            endif
+c
+c ---       tidal bottom drag
+c
+            util6(i,j)=thkdrg*onem  !bottom stress applied over this thknss
+            util5(i,j)=dragrh(i,j)/min(util6(i,j)*qonem,depths(i,j))
+          enddo !i
+        enddo !l
+c         
+c ---   store r.h.s. of barotropic u/v eqn. in -ubrhs,vbrhs-
+c ---   time-interpolate wind stress
+c
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            ubrhs(i,j)=
+     &        (vbavg(i  ,j,  m)*depthv(i  ,j)
+     &        +vbavg(i  ,j+1,m)*depthv(i  ,j+1)
+     &        +vbavg(i-1,j,  m)*depthv(i-1,j)
+     &        +vbavg(i-1,j+1,m)*depthv(i-1,j+1))
+     &        *(pvtrop(i,j)+pvtrop(i,j+1))*.125
+c    
+            if     (windf) then
+              if(hybrid .and. mxlkrt) then
+                pstres=0.5*(dpmixl(i,j,m)+dpmixl(i-1,j,m))
+              else
+                pstres=dpu(i,j,1,m)
+              endif
+c ---         units of surtx are N/m^2 (i.e. Pa)
+              stresx(i,j)=(surtx(i,j)+surtx(i-1,j))*0.5*g
+     &                    /(pstres*thref)
+            else  ! no taux
+              stresx(i,j)=0.
+            endif !windf:else
+          enddo !i
+        enddo !l
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            vbrhs(i,j)=
+     &      -(ubavg(i,  j  ,m)*depthu(i,j  )
+     &       +ubavg(i+1,j  ,m)*depthu(i+1,j  )
+     &       +ubavg(i,  j-1,m)*depthu(i,j-1)
+     &       +ubavg(i+1,j-1,m)*depthu(i+1,j-1))
+     &       *(pvtrop(i,j)+pvtrop(i+1,j))*.125
+c    
+            if     (windf) then
+              if(hybrid .and. mxlkrt) then
+                pstres=0.5*(dpmixl(i,j,m)+dpmixl(i,j-1,m))
+              else
+                pstres=dpv(i,j,1,m)
+              endif
+c ---         units of surty are N/m^2 (i.e. Pa)
+              stresy(i,j)=(surty(i,j)+surty(i,j-1))*0.5*g
+     &                    /(pstres*thref)
+            else  ! no tauy
+              stresy(i,j)=0.
+            endif !windf:else
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'uba.n  n=',n
+        call pipe_compare(ubavg(1-nbdy,1-nbdy,n),iu,text)
+        write (text,'(a9,i3)') 'vba.n  n=',n
+        call pipe_compare(vbavg(1-nbdy,1-nbdy,n),iv,text)
+        write (text,'(a9,i3)') 'drag   k=',0
+        call pipe_compare(drag,ip,text)
+      endif
+c
+c --- the old  momeq2.f  starts here
+c
+c --- rhs: 0.0
+c --- lhs: util1, util2
+c
+      margin = mbdy
+c
+!$OMP PARALLEL DO PRIVATE(j,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do i=1-margin,ii+margin
+c ---   spatial weighting function for pressure gradient calculation:
+          util1(i,j)=0.0
+          util2(i,j)=0.0
+c ---     p.1
+          pnkp( i,j)=0.0
+c
+          utotn(i,j)=0.0
+          utotm(i,j)=0.0
+          vtotn(i,j)=0.0
+          vtotm(i,j)=0.0
+        enddo !i
+      enddo !j
+c
+      do 9 k=1,kk
+c
+c --- store total (barotropic plus baroclinic) flow at old and mid time in
+c --- -utotn,vtotn- and -utotm,vtotm- respectively. store minimum thickness
+c --- values for use in pot.vort. calculation in -dpmx-.
+c --- store p.k and p.k+1 for time level t+1 in pnk0,pnkp
+c
+*         wtime2( 1,k) = wtime()
+c
+c --- rhs: dpmx, dp.m+
+c --- lhs: dpmx
+c
+      margin = mbdy - 1
+c
+      do i=1-margin,ii+margin
+        dpmx(i,1-margin)=2.*cutoff
+      enddo !i
+!$OMP PARALLEL DO PRIVATE(j,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do i=1-margin,ii+margin
+          dpmx(i,j+1)=2.*cutoff
+        enddo !i
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dpmx(i,j+1)=max(dpmx(i,j+1),dpo(i,j,k,m)+dpo(i-1,j,k,m))
+          enddo !i
+        enddo !l
+c
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            pnk0(i,j)=pnkp(i,j)
+            pnkp(i,j)=pnk0(i,j)+dp(i,j,k,n)
+          enddo !i
+        enddo !l
+      enddo !j
+c       
+*         wtime2( 2,k) = wtime()
+c
+c --- rhs: ubavg.m, ubavg.n, dp.m+, dpu
+c --- lhs: utotm, utotn, uflux, dpmx, pu
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+c       
+          i=ifu(j,l)-1
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            if     (iuopn(i,j).ne.0) then !open boundary
+              utotm(i,j)=u(i+1,j,k,m)+ubavg(i,j,m)
+              utotn(i,j)=u(i+1,j,k,n)+ubavg(i,j,n)
+              uflux(i,j)=utotm(i,j)*max(dpo(i,j,k,m),cutoff)
+            endif
+          endif
+          i=ilu(j,l)+1
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+            if     (iuopn(i,j).ne.0) then !open boundary
+              utotm(i,j)=u(i-1,j,k,m)+ubavg(i,j,m)
+              utotn(i,j)=u(i-1,j,k,n)+ubavg(i,j,n)
+              uflux(i,j)=utotm(i,j)*max(dpo(i-1,j,k,m),cutoff)
+            endif
+          endif
+c           
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            dpmx(i,j)=max(dpmx(i,j),dpo(i,j,k,m)+dpo(i-1,j,k,m))
+            utotm(i,j)=u(i,j,k,m)+ubavg(i,j,m)
+            utotn(i,j)=u(i,j,k,n)+ubavg(i,j,n)
+            uflux(i,j)=utotm(i,j)*max(dpu(i,j,k,m),cutoff)
+            pu(i,j,k+1)=pu(i,j,k)+dpu(i,j,k,m)
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c     
+*         wtime2( 3,k) = wtime()
+c
+c --- rhs: vbavg.m, vbavg.n, dp.m+, dpv
+c --- lhs: vtotm, vtotn, vflux, dpmx, pv
+c
+      margin = mbdy - 1
+c
+      do i=1-margin,ii+margin
+        do l=1,jsv(i)
+          j=jfv(i,l)-1
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            if      (ivopn(i,j).ne.0) then !open boundary
+              vtotm(i,j)=v(i,j+1,k,m)+vbavg(i,j,m)
+              vtotn(i,j)=v(i,j+1,k,n)+vbavg(i,j,n)
+              vflux(i,j)=vtotm(i,j)*max(dpo(i,j,k,m),cutoff)
+            endif
+          endif
+          j=jlv(i,l)+1
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+            if      (ivopn(i,j).ne.0) then !open boundary
+              vtotm(i,j)=v(i,j-1,k,m)+vbavg(i,j,m)
+              vtotn(i,j)=v(i,j-1,k,n)+vbavg(i,j,n)
+              vflux(i,j)=vtotm(i,j)*max(dpo(i,j-1,k,m),cutoff)
+            endif
+          endif
+        enddo !l
+      enddo !i
+c       
+*         wtime2( 4,k) = wtime()
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            dpmx(i  ,j)=max(dpmx(i  ,j),dpo(i,j,k,m)+dpo(i,j-1,k,m))
+            dpmx(i+1,j)=max(dpmx(i+1,j),dpo(i,j,k,m)+dpo(i,j-1,k,m))
+            vtotm(i,j)=v(i,j,k,m)+vbavg(i,j,m)
+            vtotn(i,j)=v(i,j,k,n)+vbavg(i,j,n)
+            vflux(i,j)=vtotm(i,j)*max(dpv(i,j,k,m),cutoff)
+            pv(i,j,k+1)=pv(i,j,k)+dpv(i,j,k,m)
+          enddo !i
+        enddo !l
+      enddo !j
+c
+c --- rhs: corio+, dp.m+, dpmx+
+c --- lhs: potvor
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,ia,ib)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+c ---   assume margin<nblk
+        ja=j-1
+        jb=j+1
+c
+c --- pot.vort., at lateral boundary points
+        do l=1,isv(j)
+          i=ifv(j,l)
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+c           input of vorticity open boundary - a test - western border
+            potvor(i  ,j)=corio(i  ,j) * 8.0
+     &                     /max(8.0*cutoff,
+     &                          4.0*(dpo(i,j,k,m)+dpo(i,ja ,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i+1,j))
+          endif
+          i=ilv(j,l)
+          if     (i.ge.1-margin .and. i.le.ii+margin) then
+c           input of vorticity open boundary - a test - eastern border
+            potvor(i+1,j)=corio(i+1,j) * 8.0
+     &                     /max(8.0*cutoff,
+     &                          4.0*(dpo(i,j,k,m)+dpo(i,ja ,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i+1,j))
+          endif
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c
+c --- pot.vort., at lateral boundary points
+c
+c --- rhs: corio+, dp.m+, dpmx+
+c --- lhs: potvor
+c
+      margin = mbdy - 1
+c
+      do i=1-margin,ii+margin
+c ---   assume margin<nblk
+        ia=i-1
+        do l=1,jsu(i)
+          j=jfu(i,l)
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+c           input of vorticity open boundary - a test - southern border
+            potvor(i,j  )=corio(i,j  ) * 8.0
+     &                     /max(8.0*cutoff,
+     &                          4.0*(dpo(i,j,k,m)+dpo(ia ,j,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i,j+1))
+          endif
+c
+          j=jlu(i,l)
+          if     (j.ge.1-margin .and. j.le.jj+margin) then
+c           input of vorticity open boundary - a test - northern border
+            potvor(i,j+1)=corio(i,j+1) * 8.0
+     &                     /max(8.0*cutoff,
+     &                          4.0*(dpo(i,j,k,m)+dpo(ia ,j,k,m)),
+     &                          dpmx(i,j),
+     &                          dpmx(i,j+1))
+          endif
+        enddo !l
+      enddo !i
+c
+c --- pot.vort., at interior points (incl. promontories)
+c
+c --- rhs: corio, dp.m+, dpmx+
+c --- lhs: potvor
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isq(j)
+          do i=max(1-margin,ifq(j,l)),min(ii+margin,ilq(j,l))
+            potvor(i,j)=corio(i,j) * 8.0
+     &         /max(8.0*cutoff,
+     &              2.0*(dpo(i,j  ,k,m)+dpo(i-1,j  ,k,m)+
+     &                   dpo(i,j-1,k,m)+dpo(i-1,j-1,k,m) ),
+     &              dpmx(i,j),dpmx(i-1,j),dpmx(i+1,j),
+     &                        dpmx(i,j-1),dpmx(i,j+1)    )
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        do j=1,jj
+          do i=1,ii
+            mask(i,j)=min(1,iq(i,j)+iu(i,j  )+iv(i,j  )
+     &                             +iu(i,j-1)+iv(i-1,j))
+          enddo
+        enddo
+        write (text,'(a9,i3)') 'potvor k=',k
+        call pipe_compare(potvor,mask,text)
+      endif
+c
+c ----------------------------------------
+c --- initialize fields for QUICK SCHEME
+c ----------------------------------------
+c
+      margin = mbdy
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do i=1-margin,ii+margin
+          advu( i,j)=0.0
+          advv( i,j)=0.0
+          diffu(i,j)=0.0
+          diffv(i,j)=0.0
+        enddo !i
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c ------------------------------------------------------
+c --- deformation-dependent eddy viscosity coefficient
+c --- defor. at interior points (incl. promontories)
+c --- defor takes into account nested and closed boundaries
+c ------------------------------------------------------
+c
+      margin = mbdy - 1
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,
+!$OMP&                    utotja,utotjb,vtotia,vtotib,wia,wib,wja,wjb)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            defor1(i,j)=((utotn(i+1,j)-utotn(i,j))
+     &                  -(vtotn(i,j+1)-vtotn(i,j)))**2
+          enddo !i
+        enddo !l
+        do l=1,isq(j)
+          do i=max(1-margin,ifq(j,l)),min(ii+margin,ilq(j,l))
+            if     (iu(i,j).ne.0 .and. iu(i,j-1).ne.0) then
+c ---         wja is 1 for sidewall at j-1 w.r.t. j
+              wja = max(0.0,min(1.0,
+     &                          (pu(i,j,k+1)-depthu(i,j-1))
+     &                            /max(pu(i,j,k+1)-pu(i,j,k),
+     &                                 epsil)))
+              utotja = (1.0-wja)*utotn(i,j-1)
+c ---         wjb is 1 for sidewall at j w.r.t. j-1, i.e. at (j-1)+1
+              wjb = max(0.0,min(1.0,
+     &                          (pu(i,j-1,k+1)-depthu(i,j))
+     &                            /max(pu(i,j-1,k+1)-pu(i,j-1,k),
+     &                                 epsil)))
+              utotjb = (1.0-wjb)*utotn(i,j) 
+            else  !disable u difference
+              utotja = utotn(i,j)
+              utotjb = utotn(i,j)
+            endif
+            if     (iv(i,j).ne.0 .and. iv(i-1,j).ne.0) then
+c ---         wia is 1 for sidewall at i-1 w.r.t. i
+              wia = max(0.0,min(1.0,
+     &                          (pv(i,j,k+1)-depthv(i-1,j))
+     &                            /max(pv(i,j,k+1)-pv(i,j,k),
+     &                                 epsil)))
+              vtotia = (1.0-wia)*vtotn(i-1,j)
+c ---         wib is 1 for sidewall at i w.r.t. i-1, i.e. at (i-1)+1
+              wib = max(0.0,min(1.0,
+     &                          (pv(i-1,j,k+1)-depthv(i,j))
+     &                            /max(pv(i-1,j,k+1)-pv(i-1,j,k),
+     &                                 epsil)))
+              vtotib = (1.0-wib)*vtotn(i,j)
+            else  !disable v difference
+              vtotia = vtotn(i,j)
+              vtotib = vtotn(i,j)
+            endif
+            defor2(i,j)=(vtotib-vtotia + utotjb-utotja)**2
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- eddy viscosity coefficient on p-grid
+c
+      margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,upij,vpij,velmodul,defortot)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+c           use boundary values (zero or open) for p-grid velocities
+            upij =  (utotn(i+1,j  ) +
+     &               utotn(i,  j  )  )*0.5
+            vpij =  (vtotn(i,  j+1) +
+     &               vtotn(i,  j  )  )*0.5
+            velmodul=sqrt( upij**2 + vpij**2 )
+c
+            defortot=sqrt(  defor1(i,  j) +
+     &                     (defor2(i,  j)  *iq(i,  j)  +
+     &                      defor2(i+1,j)  *iq(i+1,j)  +
+     &                      defor2(i,  j+1)*iq(i,  j+1)+
+     &                      defor2(i+1,j+1)*iq(i+1,j+1) )
+     &           /max(1,iq(i,j)+iq(i+1,j)+iq(i,j+1)+iq(i+1,j+1))
+     &                   )
+c
+c ---       viscosity terms are not additive, use the maximum
+c ---       note that actual viscosity is scp{xy}**3 times viscp
+            viscp(i,j)=max(0.25*(veldf4u(i,j)+veldf4u(i+1,j)+
+     &                           veldf4v(i,j)+veldf4v(i,j+1) ),
+     &                     velmodul*facdf4,
+     &                     visco4*defortot)
+c ---        CFL constraint on 2D explicit biharmonic viscosity
+             viscp(i,j)=min(cflp(i,j), viscp(i,j) )
+          enddo !i
+        enddo !l
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- eddy viscosity coefficient on q-grid
+c
+!$OMP PARALLEL DO PRIVATE(j,i,ia)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin+1,jj+margin
+        do i=1-margin+1,ii+margin
+          ia = ip(i,j)+ip(i-1,j)+ip(i,j-1)+ip(i-1,j-1)
+          if     (ia.gt.0) then
+            viscq(i,j) = (viscp(i,  j)  *ip(i,  j)   +
+     &                    viscp(i-1,j)  *ip(i-1,j)   +
+     &                    viscp(i,  j-1)*ip(i,  j-1) +
+     &                    viscp(i-1,j-1)*ip(i-1,j-1)  )/real(ia)
+          endif
+        enddo !i
+      enddo !j
+!$OMP END PARALLEL DO
+c
+c --- ----------
+c --- u equation
+c --- ----------
+c
+c --------------------------------------------------------
+c --- START QUICK ADVECTION SCHEME HERE
+c --------------------------------------------------------
+c
+c -------------------------------------
+c First compute advection along X
+c -------------------------------------
+c
+c
+      margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jm1,jp1,l,i,
+!$OMP&                    uwim,uwin,uwjm,uwjn,dum,dun,
+!$OMP&                    clpm,crmm,clpn,clmn,crpn,crmn)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do 16 j=1-margin,jj+margin
+        do i=1-nbdy,ii+nbdy
+          uwim(i)=utotm(i,j)
+          uwin(i)=utotn(i,j)
+        enddo !i
+c
+        do l=1,isu(j)
+c
+c ---     modify uwi for boundary conditions : begin
+          i=ifu(j,l)
+          if     (i-2.ge. 1-nbdy) then
+            if (iuopn(i-1,j).ne.0) then !open boundary
+              uwin(i-2)= utotn(i-1,j)
+              uwim(i-2)= utotm(i-1,j)
+            else
+              uwin(i-2)=-utotn(i,  j)  !uwin(i-1)==0.0
+              uwim(i-2)=-utotm(i,  j)  !uwim(i-1)==0.0
+            endif
+          endif
+          i=ilu(j,l)
+          if     (i+2.le.ii+nbdy) then
+            if (iuopn(i+1,j).ne.0) then !open boundary
+              uwin(i+2)= utotn(i+1,j)
+              uwim(i+2)= utotm(i+1,j)
+            else
+              uwin(i+2)=-utotn(i,  j)  !uwin(i+1)==0.0
+              uwim(i+2)=-utotm(i,  j)  !uwim(i+1)==0.0
+            endif
+          endif
+c ---     modify uwi for boundary conditions : end
+c
+           do i=max(1-nbdy+1,ifu(j,l)-1),min(ii+nbdy,ilu(j,l)+2)
+             dum(i)=uwim(i)-uwim(i-1)
+             dun(i)=uwin(i)-uwin(i-1)
+           enddo !i
+c
+           do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+             clpm=dum(i)  -dum(i-1)
+             crmm=dum(i+2)-dum(i+1)
+c
+             clpn=dun(i)  -dun(i-1)
+             clmn=dun(i+1)-dun(i)
+             crpn=clmn
+             crmn=dun(i+2)-dun(i+1)
+c
+c ---        calculating U dxU and biharmonic diffusion
+             advu(i,j)=uwim(i)*(0.5*(uwim(i+1)-uwim(i-1)) -
+     &                            q12*(crmm-clpm)            )*
+     &                 scuxi(i,j)
+c
+             diffu(i,j)=
+     &        (viscp(i,  j)*(crpn-crmn)*max(hmindiff,dpo(i,  j,k,m)) -
+     &         viscp(i-1,j)*(clpn-clmn)*max(hmindiff,dpo(i-1,j,k,m))  )
+     &           *scuxi(i,j)/max(hmindiff,dpu(i,j,k,m))
+c
+cdiag        if (max(abs(i-itest),abs(j-jtest)).le.1.and.k.eq.1) then
+cdiag          write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.           'advu-x =',
+cdiag.           i+i0,j+j0,k,
+cdiag.           advu(i,j),
+cdiag.           uwim(i)*0.5*(uwim(i+1)-uwim(i-1))*scuxi(i,j),
+cdiag.          -uwim(i)*q12*(crmm-clpm)*scuxi(i,j),
+cdiag.           uwim(i)
+cdiag        endif !test
+           enddo !i
+c
+c ---     restore uwi from boundary conditions : begin
+          i=ifu(j,l)
+          if     (i-2.ge. 1-nbdy) then
+            uwin(i-2)=utotn(i-2,j)
+            uwim(i-2)=utotm(i-2,j)
+          endif
+          i=ilu(j,l)
+          if     (i+2.le.ii+nbdy) then
+            uwin(i+2)=utotn(i+2,j)
+            uwim(i+2)=utotm(i+2,j)
+          endif
+c ---     restore uwi from boundary conditions : end
+        enddo !l
+c
+c ---   -------------------------------------
+c ---   Now compute advection along Y
+c ---   -------------------------------------
+c
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            do ja= -2,2
+              uwjm(ja) = utotm(i,j+ja)
+              uwjn(ja) = utotn(i,j+ja)
+            enddo !ja
+c
+            if     (iu(i,j-1).eq.0) then
+              if     (iuopn(i,j-1).ne.0) then  !open boundary
+                uwjn(-2)= utotn(i,j-1)
+                uwjm(-2)= utotm(i,j-1)
+              else
+                uwjn(-2)=-utotn(i,j)  !uwjn(-1)==0.0
+                uwjm(-2)=-utotm(i,j)  !uwjm(-1)==0.0
+              endif
+            endif
+            if     (iu(i,j+1).eq.0) then
+              if     (iuopn(i,j+1).ne.0) then  !open boundary
+                uwjn( 2)= utotn(i,j+1)
+                uwjm( 2)= utotm(i,j+1)
+              else
+                uwjn( 2)=-utotn(i,j)  !uwjn( 1)==0.0
+                uwjm( 2)=-utotm(i,j)  !uwjm( 1)==0.0
+              endif
+            endif
+c
+            do ja= -1,2
+              dun(j+ja)=uwjn(ja)-uwjn(ja-1)
+              dum(j+ja)=uwjm(ja)-uwjm(ja-1)
+            enddo
+c
+            clpm=dum(j)  -dum(j-1)
+            crmm=dum(j+2)-dum(j+1)
+c
+            clpn=dun(j)  -dun(j-1)
+            crmn=dun(j+2)-dun(j+1)
+            clmn=dun(j+1)-dun(j)
+            crpn=clmn
+c
+            advu(i,j)=advu(i,j)+
+     &      0.25*(vtotm(i,j)  +vtotm(i-1,j)  +
+     &            vtotm(i,j+1)+vtotm(i-1,j+1) )*
+     &            (0.5*(uwjm(+1)-uwjm(-1))-
+     &             q12*(crmm-clpm)         )*scuyi(i,j)
+c
+            jm1=j-1
+            if(iu(i,j-1).eq.0) then
+              jm1=j
+            endif
+            jp1=j+1
+            if(iu(i,j+1).eq.0) then
+              jp1=j
+            endif
+            diffu(i,j)=diffu(i,j)+
+     &       ( viscq(i,j+1)*(crpn-crmn)*
+     &         max(hmindiff,0.5*(dpu(i,jp1,k,m)+dpu(i,j,  k,m)))
+     &        -viscq(i,j)  *(clpn-clmn)*
+     &         max(hmindiff,0.5*(dpu(i,j,  k,m)+dpu(i,jm1,k,m)))
+     &       )*scuyi(i,j)/max(hmindiff,dpu(i,j,k,m))
+c
+c
+cdiag       if (max(abs(i-itest),abs(j-jtest)).le.1.and.k.eq.1) then
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'advu-y =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          advu(i,j),
+cdiag.          0.25*(vtotm(i,j)  +vtotm(i-1,j)  +
+cdiag.                vtotm(i,j+1)+vtotm(i-1,j+1) )*scuyi(i,j)*
+cdiag.          0.5*(uwjm(+1)-uwjm(-1)),
+cdiag.         -0.25*(vtotm(i,j)  +vtotm(i-1,j)  +
+cdiag.                vtotm(i,j+1)+vtotm(i-1,j+1) )*scuyi(i,j)*
+cdiag.          q12*(crmm-clpm),
+cdiag.          0.25*(vtotm(i,j)  +vtotm(i-1,j)  +
+cdiag.                vtotm(i,j+1)+vtotm(i-1,j+1) )
+cdiag       endif !test
+          enddo !i
+        enddo !l
+   16 continue
+!$OMP END PARALLEL DO
+c
+c ------------------------------------------------------
+c --- ----------
+c --- v equation
+c --- ----------
+c ------------------------------------------------------
+c
+c --------------------------------------------------------
+c --- START QUICK ADVECTION SCHEME HERE
+c --------------------------------------------------------
+c
+c -------------------------------------
+c First compute advection along X
+c -------------------------------------
+c
+      margin = mbdy - 2
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,l,i,im1,ip1,dvm,dvn,vwim,vwin,
+!$OMP&             dvm,dvn,vwim,vwin,vwjm,vwjn,
+!$OMP&             clpm,crmm,clpn,clmn,crpn,crmn)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do 17 j=1-margin,jj+margin
+        do i=1-nbdy,ii+nbdy
+          vwim(i)=vtotm(i,j)
+          vwin(i)=vtotn(i,j)
+        enddo !i
+c
+        do l=1,isv(j)
+c
+c ---     modify vwi for boundary conditions : begin
+          i=ifv(j,l)
+          if     (ivopn(i-1,j).ne.0) then  !open boundary
+            if     (i-2.gt.1-nbdy) then
+              vwin(i-2)= vtotn(i-1,j)
+              vwim(i-2)= vtotm(i-1,j)
+            endif 
+          else
+            if     (i-2.gt.1-nbdy) then
+              vwin(i-2)=-vtotn(i,  j)  !vwin(i-1)==0.0
+              vwim(i-2)=-vtotm(i,  j)  !vwim(i-1)==0.0
+            endif 
+          endif 
+c
+          i=ilv(j,l)
+          if     (ivopn(i+1,j).ne.0) then  !open boundary
+            if     (i+2.le.ii+nbdy) then
+              vwin(i+2)= vtotn(i+1,j)
+              vwim(i+2)= vtotm(i+1,j)
+            endif 
+          else
+            if     (i+2.le.ii+nbdy) then
+              vwin(i+2)=-vtotn(i,j)  !vwin(i+1==0.0
+              vwim(i+2)=-vtotm(i,j)  !vwim(i+1==0.0
+            endif 
+          endif 
+c ---     modify vwi for boundary conditions : end
+c
+          do i=max(1-nbdy+1,ifv(j,l)-1),min(ii+nbdy,ilv(j,l)+2)
+            dvm(i)=vwim(i)-vwim(i-1)
+            dvn(i)=vwin(i)-vwin(i-1)
+          enddo !i
+c
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            clpm=dvm(i)  -dvm(i-1)
+            crmm=dvm(i+2)-dvm(i+1)
+c
+            clpn=dvn(i)  -dvn(i-1)
+            crmn=dvn(i+2)-dvn(i+1)
+            clmn=dvn(i+1)-dvn(i)
+            crpn=clmn
+c
+c ---       calculating U dxV and biharmonic diffusion
+            advv(i,j)=
+     &      0.25*(utotm(i,j)  +utotm(i+1,j)  +
+     &            utotm(i,j-1)+utotm(i+1,j-1) )*
+     &            (0.5*(vwim(i+1)-vwim(i-1))-
+     &             q12*(crmm-clpm)               )*scvxi(i,j)
+c
+            im1=i-1
+            if(iv(i-1,j).eq.0) then
+              im1=i
+            endif
+            ip1=i+1
+            if(iv(i+1,j).eq.0) then
+              ip1=i
+            endif
+            diffv(i,j)=
+     &      ( viscq(i+1,j)*(crpn-crmn)*
+     &        max(hmindiff,0.5*(dpv(ip1,j,k,m)+dpv(i,  j,k,m))) -
+     &        viscq(i,  j)*(clpn-clmn)*
+     &        max(hmindiff,0.5*(dpv(i,  j,k,m)+dpv(im1,j,k,m)))  )
+     &         *scvxi(i,j)/max(hmindiff,dpv(i,j,k,m))
+c
+cdiag       if (max(abs(i-itest),abs(j-jtest)).le.1.and.k.eq.1) then
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'advv-x =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          advv(i,j),
+cdiag.          0.25*(utotm(i,j)  +utotm(i+1,j)  +
+cdiag.                utotm(i,j-1)+utotm(i+1,j-1) )*scvxi(i,j)*
+cdiag.          0.5*(vwim(i+1)-vwim(i-1)),
+cdiag.         -0.25*(utotm(i,j)  +utotm(i+1,j)  +
+cdiag.                utotm(i,j-1)+utotm(i+1,j-1) )*scvxi(i,j)*
+cdiag.          q12*(crmm-clpm),
+cdiag.          0.25*(utotm(i,j)  +utotm(i+1,j)  +
+cdiag.                utotm(i,j-1)+utotm(i+1,j-1) )
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'advv-v =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          vwim(i-2),
+cdiag.          vwim(i-1),
+cdiag.          vwim(i+1),
+cdiag.          vwim(i+2)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-v =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          vwin(i-2),
+cdiag.          vwin(i-1),
+cdiag.          vwin(i+1),
+cdiag.          vwin(i+2)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-x =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          diffv(i,j),
+cdiag.          viscq(i,j),
+cdiag.          viscq(i+1,j),
+cdiag.          vwin(i)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-c =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          crpn,
+cdiag.          crpn-crmn,
+cdiag.          clpn,
+cdiag.          clpn-clmn
+cdiag       endif !test
+          enddo !i
+c
+c ---     restore vwi from boundary conditions : begin
+          i=ifv(j,l)
+          if     (i-1.gt.1-nbdy) then
+            vwin(i-1)=vtotn(i-1,j)
+            vwim(i-1)=vtotm(i-1,j)
+          endif
+          if     (i-2.gt.1-nbdy) then
+            vwin(i-2)=vtotn(i-2,j)
+            vwim(i-2)=vtotm(i-2,j)
+          endif
+          i=ilv(j,l)
+          if     (i+1.lt.ii+nbdy) then
+            vwin(i+1)=vtotn(i+1,j)
+            vwim(i+1)=vtotm(i+1,j)
+          endif
+          if     (i+2.lt.ii+nbdy) then
+            vwin(i+2)=vtotn(i+2,j)
+            vwim(i+2)=vtotm(i+2,j)
+          endif
+c ---     restore vwi from boundary conditions : end
+        enddo !l
+c
+c ---  -------------------------------------
+c ---  Now compute advection along Y
+c ---  -------------------------------------
+c
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            do ja= -2,2
+              vwjm(ja) = vtotm(i,j+ja)
+              vwjn(ja) = vtotn(i,j+ja)
+            enddo !ja
+c
+            if     (iv(i,j-1).eq.0) then
+              if     (ivopn(i,j-1).ne.0) then  !open boundary
+                vwjn(-2)= vtotn(i,j-1)
+                vwjm(-2)= vtotm(i,j-1)
+              else
+                vwjn(-2)=-vtotn(i,j)  !vwjn(-1)==0.0
+                vwjm(-2)=-vtotm(i,j)  !vwjm(-1)==0.0
+              endif
+            endif
+            if     (iv(i,j+1).eq.0) then
+              if     (ivopn(i,j+1).ne.0) then  !open boundary
+                vwjn( 2)= vtotn(i,j+1)
+                vwjm( 2)= vtotm(i,j+1)
+              else
+                vwjn( 2)=-vtotn(i,j)  !vwjn( 1)==0.0
+                vwjm( 2)=-vtotm(i,j)  !vwjm( 1)==0.0
+              endif
+            endif
+c
+            do ja= -1,2
+              dvn(j+ja)=vwjn(ja)-vwjn(ja-1)
+              dvm(j+ja)=vwjm(ja)-vwjm(ja-1)
+            enddo !ja
+c
+            clpm=dvm(j)  -dvm(j-1)
+            crmm=dvm(j+2)-dvm(j+1)
+c
+            clpn=dvn(j)  -dvn(j-1)
+            clmn=dvn(j+1)-dvn(j)
+            crpn=clmn
+            crmn=dvn(j+2)-dvn(j+1)
+c
+            advv(i,j)=advv(i,j)+
+     &                vwjm(0)*(0.5*(vwjm(+1)-vwjm(-1)) -
+     &                         q12*(crmm-clpm)           )*
+     &                scvyi(i,j)
+c
+             diffv(i,j)=diffv(i,j)+
+     &        (viscp(i,j)  *(crpn-crmn)*max(hmindiff,dpo(i,j,  k,m)) -
+     &         viscp(i,j-1)*(clpn-clmn)*max(hmindiff,dpo(i,j-1,k,m))  )
+     &           *scvyi(i,j)/max(hmindiff,dpv(i,j,k,m))
+c
+cdiag       if (max(abs(i-itest),abs(j-jtest)).le.1.and.k.eq.1) then
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'advv-y =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          advv(i,j),
+cdiag.          vwjm(0)*0.5*(vwjm(+1)-vwjm(-1))*scvyi(i,j),
+cdiag.         -vwjm(0)*(q12*(crmm-clpm))*scvyi(i,j),
+cdiag.          vwjm(0)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'advv-v =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          vwjm(-2),
+cdiag.          vwjm(-1),
+cdiag.          vwjm( 1),
+cdiag.          vwjm( 2)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-v =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          vwjn(-2),
+cdiag.          vwjn(-1),
+cdiag.          vwjn( 1),
+cdiag.          vwjn( 2)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-y =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          diffv(i,j),
+cdiag.          viscp(i,j),
+cdiag.          viscp(i,j-1),
+cdiag.          vwjn(0)
+cdiag         write(lp,'(a,2i5,i3,4f12.5)')
+cdiag.          'difv-c =',
+cdiag.          i+i0,j+j0,k,
+cdiag.          crpn,
+cdiag.          crpn-crmn,
+cdiag.          clpn,
+cdiag.          clpn-clmn
+cdiag       endif !test
+          enddo !i
+        enddo !l
+   17 continue
+!$OMP END PARALLEL DO
+c
+c --- ---------------------------------------
+c --- ---------------------------------------
+c --- ----------
+c --- u equation
+c --- ----------
+c --- ---------------------------------------
+c --- ---------------------------------------
+c
+c --- pressure force in x direction
+c --- ('scheme 2' from appendix -a- in bleck-smith paper)
+c
+c --- rhs: depthu, pu, montg+, thstar+, p+, dp.m+
+c --- lhs: util1, pgfx
+c
+      margin = mbdy - 4
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,dmontg,dthstr,q)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            util1(i,j)=max(0.0,min(depthu(i,j)-pu(i,j,k),h1))
+c
+            if     (kapref.ne.-1) then
+              dmontg=montg( i,j,k,1)-montg( i-1,j,k,1)
+              dthstr=thstar(i,j,k,1)-thstar(i-1,j,k,1)
+            else !2 thermobaric reference states
+              q=0.5*(skap(i,j)+skap(i-1,j))
+              dmontg=     q *(montg( i,j,k,1)-montg( i-1,j,k,1))+
+     &               (1.0-q)*(montg( i,j,k,2)-montg( i-1,j,k,2))
+              dthstr=     q *(thstar(i,j,k,1)-thstar(i-1,j,k,1))+
+     &               (1.0-q)*(thstar(i,j,k,2)-thstar(i-1,j,k,2))
+            endif
+            pgfx(i,j)=util1(i,j)*
+     &        (scuxi(i,j)*(dmontg+
+     &                     dthstr*(p(i,j,k+1)*p(i-1,j,k+1)-
+     &                             p(i,j,k  )*p(i-1,j,k  ))*thref**2
+     &                        /(dp(i,j,k,m)+dp(i-1,j,k,m)+epsil)    )
+     &        )
+          enddo
+        enddo
+      enddo
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'pu     k=',k
+        call pipe_compare(pu(1-nbdy,1-nbdy,k),iu,text)
+        write (text,'(a9,i3)') 'depthu k=',k
+        call pipe_compare(depthu,iu,text)
+        write (text,'(a9,i3)') 'util1  k=',k
+        call pipe_compare(util1, iu,text)
+        util4(1:ii,1:jj) = montg( 1:ii,1:jj,k,1)-montg( 0:ii-1,1:jj,k,1)
+        write (text,'(a9,i3)') 'montgX k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = thstar(1:ii,1:jj,k,1)-thstar(0:ii-1,1:jj,k,1)
+        write (text,'(a9,i3)') 'thstaX k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k)*p(0:ii-1,1:jj,k)
+        write (text,'(a9,i3)') 'pSQ    k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k+1)*p(0:ii-1,1:jj,k+1)
+        write (text,'(a9,i3)') 'pSQ    k=',k+1
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = dp(1:ii,1:jj,k,m)+dp(0:ii-1,1:jj,k,m)+epsil
+        write (text,'(a9,i3)') 'dp.m+  k=',k
+        call pipe_compare(util4, iu,text)
+        write (text,'(a9,i3)') 'advu   k=',k
+        call pipe_compare(advu,  iu,text)
+        write (text,'(a9,i3)') 'diffu  k=',k
+        call pipe_compare(diffu, iu,text)
+        util4(1:ii,1:jj) = vflux(1:ii,  1:jj)+vflux(1:ii,  2:jj+1)+
+     &                     vflux(0:ii-1,1:jj)+vflux(0:ii-1,2:jj+1)
+        write (text,'(a9,i3)') 'vflux  k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = potvor(1:ii,1:jj)+potvor(1:ii,2:jj+1)
+        write (text,'(a9,i3)') 'potvor k=',k
+        call pipe_compare(util4, iu,text)
+        write (text,'(a9,i3)') 'pgfx   k=',k
+        call pipe_compare(pgfx,  iu,text)
+      endif
+c
+c
+c --- rhs: pgfx+, util1+, p+, dpmixl.m+, dpu.m, utotn, drag+
+c --- rhs: stresx, u.m, u.n, dpu.n, gradx, utotm+, vtotm+,
+c --- rhs: vflux+, potvor+, uflux1+, uflux2, uflux3
+c --- lhs: gradx, stress, u.m, u.n
+c
+      margin = mbdy - 5
+c
+!$OMP PARALLEL DO PRIVATE(j,ja,jb,l,i,
+!$OMP&                    q,dpun,uhm,uh0,uhp,
+!$OMP&                    ptopl,pbotl,pstres,pbop,qdpu,dragu)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        ja=j-1
+        jb=j+1
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+c
+            gradx(i,j)=(pgfx(i,j)+(h1-util1(i,j))*
+     &        (pgfx (i-1,j)+pgfx (i+1,j)+pgfx (i,ja)+pgfx (i,jb))/
+     &        (util1(i-1,j)+util1(i+1,j)+util1(i,ja)+util1(i,jb)+
+     &          epsil))/h1
+c
+            ptopl=min(depthu(i,j),0.5*(p(i,j,k  )+p(i-1,j,k  )))
+            pbotl=min(depthu(i,j),0.5*(p(i,j,k+1)+p(i-1,j,k+1)))
+            if(hybrid .and. mxlkrt) then
+              pstres=0.5*(dpmixl(i,j,m)+dpmixl(i-1,j,m))
+            else
+              pstres=dpu(i,j,1,m)
+            endif
+c             
+c ---       top and bottom boundary layer stress
+c ---       drag term is FRAC * Cb * (|v| + c.bar) * onem/dp
+c ---        where FRAC is the fraction of the layer to apply stress too
+c
+            pbop=depthu(i,j)-0.5*(thkbop(i,j)+thkbop(i-1,j)) !top of bot. b.l.
+            qdpu=1.0/max(dpu(i,j,k,m),onemm)
+            dragu=0.5*(drag(i,j)+drag(i-1,j))*qdpu*
+     &                ( max(pbop,    pbotl)
+     &                 -max(pbop,min(ptopl,pbotl-onemm)))
+            if     (drglim.gt.0.0) then
+c             explicit drag: u.t+1 - u.t-1 = - 2dt*dragu*u.t-1
+c                   limiter: 2dt*dragu <= drglim
+              stress(i,j)=-utotn(i,j)*min(dragu,drglim*dt1inv) +
+     &             (stresx(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpu
+            else
+c             implicit drag: u.t+1 - u.t-1 = - 2dt*dragu*u.t+1
+c                                          = - 2dt*dragu / (1+2dt*dragu) * u.t+1
+              stress(i,j)=-utotn(i,j)*dragu/(1.0+delt1*dragu) +
+     &             (stresx(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpu
+            endif
+c
+            if     (tidflg.gt.0 .and. drgscl.ne.0.0) then
+              pbop=depthu(i,j)-0.5*(util6(i,j)+util6(i-1,j)) !top of bot. b.l.
+              dragu=0.5*(util5(i,j)+util5(i-1,j))*
+     &                  ( max(pbop,    pbotl)
+     &                   -max(pbop,min(ptopl,pbotl-onemm)))*qdpu
+              if     (drglim.gt.0.0) then
+                stress(i,j)=stress(i,j)
+     &                      -utotn(i,j)*min(dragu,drglim*dt1inv)
+              else
+                stress(i,j)=stress(i,j)
+     &                      -utotn(i,j)*dragu/(1.0+delt1*dragu)
+              endif
+c ---         !anti-drag on detided velocity (always explicit)
+              stress(i,j)=stress(i,j)
+     &                      +untide(i,j)*min(dragu,adrlim*dt1inv)
+            endif !tidflg
+c
+cdiag       util4(i,j) = u(i,j,k,n)
+            u(i,j,k,n) = utotn(i,j) + delt1*(
+     &       - gradx(i,j)
+     &       - ubrhs(i,j)
+     &       +stress(i,j)
+     &       -  advu(i,j)
+     &       + diffu(i,j)
+     &       + 0.125*(vflux(i  ,j)  +
+     &                vflux(i  ,j+1)+
+     &                vflux(i-1,j)  +
+     &                vflux(i-1,j+1) )*(potvor(i,j)+potvor(i,j+1)) )
+c
+c ---       Robert-Asselin time filter of -u- field
+c ---       Note that this is smoothing dp * utot,
+c ---        but the filter is not conservative over 3 time levels.
+            dpun = max(0.0,
+     &                 min(depthu(i,j),0.5*(pnkp(i,j)+pnkp(i-1,j)))-
+     &                 min(depthu(i,j),0.5*(pnk0(i,j)+pnk0(i-1,j))) )
+            uhm  = utotn(i,j)*max(dpu(i,j,k,n),dpthin)
+            uh0  = utotm(i,j)*max(dpu(i,j,k,m),dpthin)
+            uhp  = u(i,j,k,n)*max(dpun,        dpthin)
+            q    = 0.5*ra2fac*(uhm + uhp - 2.0*uh0)
+            u(i,j,k,m) = uh0 + q
+            u(i,j,k,n) = uhp
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'vtotm  k=',k
+        call pipe_compare(vtotm, iv,text)
+        write (text,'(a9,i3)') 'utotm  k=',k
+        call pipe_compare(utotm, iu,text)
+        util4(1:ii,1:jj) = advu(0:ii-1,1:jj)  +
+     &                     advu(2:ii+1,1:jj)  +
+     &                     advu(1:ii,  0:jj-1)+
+     &                     advu(1:ii,  2:jj+1)
+        write (text,'(a9,i3)') 'advu+  k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = diffu(0:ii-1,1:jj)  +
+     &                     diffu(2:ii+1,1:jj)  +
+     &                     diffu(1:ii,  0:jj-1)+
+     &                     diffu(1:ii,  2:jj+1)
+        write (text,'(a9,i3)') 'diffu+ k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = pgfx(0:ii-1,1:jj)  +
+     &                     pgfx(2:ii+1,1:jj)  +
+     &                     pgfx(1:ii,  0:jj-1)+
+     &                     pgfx(1:ii,  2:jj+1)
+        write (text,'(a9,i3)') 'pgfx+  k=',k
+        call pipe_compare(util4, iu,text)
+        util4(1:ii,1:jj) = util1(0:ii-1,1:jj)  +
+     &                     util1(2:ii+1,1:jj)  +
+     &                     util1(1:ii,  0:jj-1)+
+     &                     util1(1:ii,  2:jj+1)+epsil
+        write (text,'(a9,i3)') 'util1+ k=',k
+        call pipe_compare(util4, iu,text)
+        write (text,'(a9,i3)') 'gradx  k=',k
+        call pipe_compare(gradx, iu,text)
+        write (text,'(a9,i3)') 'ubrhs  k=',k
+        call pipe_compare(ubrhs, iu,text)
+        write (text,'(a9,i3)') 'stress k=',k
+        call pipe_compare(stress,iu,text)
+        write (text,'(a9,i3)') 'u.n    k=',k
+        call pipe_compare(u(1-nbdy,1-nbdy,k,n),iu,text)
+      endif
+c
+cdiag if (k.eq.1) then
+cdiag if     (itest.gt.0 .and. jtest.gt.0) then
+cdiag write (lp,100) nstep
+cdiag do j=jtest-1,jtest+1
+cdiag do i=itest-1,itest+1
+cdiag if     (iu(i,j).ne.1) then
+cdiag write (lp,'(2i5,i3,2f8.3)') i+i0,j+j0,k,
+cdiag.  0.0,0.0
+cdiag else
+cdiag write (lp,'(2i5,i3,8f8.3)') i+i0,j+j0,k,
+cdiag.  util4(i,j),u(i,j,k,n),
+cdiag.  -delt1*gradx(i,j),
+cdiag.  -delt1*advu(i,j),
+cdiag.   delt1*
+cdiag.   .125*(vflux(i  ,j)+vflux(i  ,j+1)+vflux(i-1,j)+vflux(i-1,j+1))
+cdiag.       *(potvor(i,j)+potvor(i,j+1)),
+cdiag.  -delt1*ubrhs(i,j),
+cdiag.   delt1*stress(i,j),
+cdiag.   delt1*diffu(i,j)
+cdiag endif
+cdiag enddo !i
+cdiag enddo !j
+cdiag endif !test
+cdiag endif !k==1
+ 100    format(i9,8x,'uold    unew   gradp  nonlin   corio',
+     &3x,'ubrhs  stress    fric')
+c
+c --- ----------
+c --- v equation
+c --- ----------
+c
+c --- pressure force in y direction
+c --- ('scheme 2' from appendix -a- in bleck-smith paper)
+c
+      margin = mbdy - 4
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,dmontg,dthstr,q)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            util2(i,j)=max(0.,min(depthv(i,j)-pv(i,j,k),h1))
+            if     (kapref.ne.-1) then
+              dmontg=montg( i,j,k,1)-montg( i,j-1,k,1)
+              dthstr=thstar(i,j,k,1)-thstar(i,j-1,k,1)
+            else !2 thermobaric reference states
+              q=0.5*(skap(i,j)+skap(i,j-1))
+              dmontg=     q *(montg( i,j,k,1)-montg( i,j-1,k,1))+
+     &               (1.0-q)*(montg( i,j,k,2)-montg( i,j-1,k,2))
+              dthstr=     q *(thstar(i,j,k,1)-thstar(i,j-1,k,1))+
+     &               (1.0-q)*(thstar(i,j,k,2)-thstar(i,j-1,k,2))
+            endif
+            pgfy(i,j)=util2(i,j)*
+     &        (scvyi(i,j)*(dmontg+
+     &                     dthstr*(p(i,j,k+1)*p(i,j-1,k+1)-
+     &                             p(i,j,k  )*p(i,j-1,k  ))*thref**2
+     &                      /(dp(i,j,k,m)+dp(i,j-1,k,m)+epsil)      )
+     &        )
+          enddo
+        enddo
+      enddo
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'pv     k=',k
+        call pipe_compare(pv(1-nbdy,1-nbdy,k),iv,text)
+        write (text,'(a9,i3)') 'depthv k=',k
+        call pipe_compare(depthv,iv,text)
+        write (text,'(a9,i3)') 'util2  k=',k
+        call pipe_compare(util2, iv,text)
+        util4(1:ii,1:jj) = montg( 1:ii,1:jj,k,1)-montg( 1:ii,0:jj-1,k,1)
+        write (text,'(a9,i3)') 'montgY k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = thstar(1:ii,1:jj,k,1)-thstar(1:ii,0:jj-1,k,1)
+        write (text,'(a9,i3)') 'thstaY k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k)  *p(1:ii,0:jj-1,k)
+        write (text,'(a9,i3)') 'pSQ    k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = p(1:ii,1:jj,k+1)*p(1:ii,0:jj-1,k+1)
+        write (text,'(a9,i3)') 'pSQ    k=',k+1
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) = dp(1:ii,1:jj,k,m)+dp(1:ii,0:jj-1,k,m)+epsil
+        write (text,'(a9,i3)') 'dp.m+  k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'pgfy   k=',k
+        call pipe_compare(pgfy,  iv,text)
+      endif
+c
+      margin = mbdy - 5
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,ia,ib)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            ia=i-1
+            ib=i+1
+c
+            grady(i,j)=(pgfy(i,j)+(h1-util2(i,j))*
+     &        (pgfy (ia ,j)+pgfy (ib ,j)
+     &        +pgfy (i,j-1)+pgfy (i,j+1))/
+     &        (util2(ia ,j)+util2(ib ,j)
+     &        +util2(i,j-1)+util2(i,j+1)+epsil))/h1
+          enddo
+        enddo
+      enddo
+c
+      margin = mbdy - 5
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,
+!$OMP&                    q,dpvn,vhm,vh0,vhp,
+!$OMP&                    ptopl,pbotl,pstres,pbop,qdpv,dragv)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+c
+            ptopl=min(depthv(i,j),0.5*(p(i,j,k  )+p(i,j-1,k  )))
+            pbotl=min(depthv(i,j),0.5*(p(i,j,k+1)+p(i,j-1,k+1)))
+            if(hybrid .and. mxlkrt) then
+              pstres=0.5*(dpmixl(i,j,m)+dpmixl(i,j-1,m))
+            else
+              pstres=dpv(i,j,1,m)
+            endif
+c
+c ---       top and bottom boundary layer stress
+c ---       drag term is FRAC * Cb * (|v| + c.bar) * onem/dp
+c ---        where FRAC is the fraction of the layer to apply stress too
+            pbop=depthv(i,j)-0.5*(thkbop(i,j)+thkbop(i,j-1))  !top of bot. b.l.
+            qdpv=1.0/max(dpv(i,j,k,m),onemm)
+            dragv=0.5*(drag(i,j)+drag(i,j-1))*qdpv*
+     &                ( max(pbop,    pbotl)
+     &                 -max(pbop,min(ptopl,pbotl-onemm)))
+            if     (drglim.gt.0.0) then
+              stress(i,j)=-vtotn(i,j)*min(dragv,drglim*dt1inv) +
+     &             (stresy(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpv
+            else
+              stress(i,j)=-vtotn(i,j)*dragv/(1.0+delt1*dragv) +
+     &             (stresy(i,j)*thref*(min(pstres,pbotl+onemm)
+     &                                -min(pstres,ptopl      )))*qdpv
+            endif
+c
+            if     (tidflg.gt.0 .and. drgscl.ne.0.0) then
+              pbop=depthv(i,j)-0.5*(util6(i,j)+util6(i,j-1))  !top of bot. b.l.
+              dragv=0.5*(util5(i,j)+util5(i,j-1))*
+     &                  ( max(pbop,    pbotl)
+     &                   -max(pbop,min(ptopl,pbotl-onemm)))*qdpv
+              if     (drglim.gt.0.0) then
+                stress(i,j)=stress(i,j)
+     &                      -vtotn(i,j)*min(dragv,drglim*dt1inv)
+              else
+                stress(i,j)=stress(i,j)
+     &                      -vtotn(i,j)*dragv/(1.0+delt1*dragv)
+              endif
+c ---         !anti-drag on detided velocity (always explicit)
+              stress(i,j)=stress(i,j)
+     &                      +vntide(i,j)*min(dragv,adrlim*dt1inv)
+            endif !tidflg
+c
+cdiag       util4(i,j) = v(i,j,k,n)
+            v(i,j,k,n) = vtotn(i,j) + delt1*(
+     &       - grady(i,j)
+     &       - vbrhs(i,j)
+     &       +stress(i,j)
+     &       -  advv(i,j)
+     &       + diffv(i,j)
+     &       - 0.125*(uflux(i,  j)  +
+     &                uflux(i+1,j)  +
+     &                uflux(i,  j-1)+
+     &                uflux(i+1,j-1) )*(potvor(i,j)+potvor(i+1,j)) )
+c
+c ---       Robert-Asselin time filter of -v- field
+c ---       Note that this is smoothing dp * vtot,
+c ---        but the filter is not conservative over 3 time levels.
+            dpvn = max(0.0,
+     &                 min(depthv(i,j),0.5*(pnkp(i,j)+pnkp(i,j-1)))-
+     &                 min(depthv(i,j),0.5*(pnk0(i,j)+pnk0(i,j-1))) )
+            vhm  = vtotn(i,j)*max(dpv(i,j,k,n),dpthin)
+            vh0  = vtotm(i,j)*max(dpv(i,j,k,m),dpthin)
+            vhp  = v(i,j,k,n)*max(dpvn,        dpthin)
+            q    = 0.5*ra2fac*(vhm + vhp - 2.0*vh0)
+            v(i,j,k,m) = vh0 + q
+            v(i,j,k,n) = vhp
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        util4(1:ii,1:jj) =  vtotm(1:ii,  2:jj+1)**2
+     &                     +utotm(1:ii,  1:jj  )**2
+     &                     +utotm(2:ii+1,1:jj  )**2
+     &                     -vtotm(1:ii,  0:jj-1)**2
+     &                     -utotm(1:ii,  0:jj-1)**2
+     &                     -utotm(2:ii+1,0:jj-1)**2
+        write (text,'(a9,i3)') 'totm   k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'grady  k=',k
+        call pipe_compare(grady, iv,text)
+        write (text,'(a9,i3)') 'vbrhs  k=',k
+        call pipe_compare(vbrhs, iv,text)
+        if     (k.eq.kk) then
+          write (text,'(a9,i3)') 'p      k=',k-1
+          call pipe_compare(p(1-nbdy,1-nbdy,k-1),ip,text)
+          write (text,'(a9,i3)') 'p      k=',k
+          call pipe_compare(p(1-nbdy,1-nbdy,k)  ,ip,text)
+          write (text,'(a9,i3)') 'drag   k=',k
+          call pipe_compare(drag,ip,text)
+        endif
+        write (text,'(a9,i3)') 'stress k=',k
+        call pipe_compare(stress,iv,text)
+        util4(1:ii,1:jj) =  uflux(1:ii,  1:jj  )
+     &                     +uflux(2:ii+1,1:jj  )
+     &                     +uflux(1:ii,  0:jj-1)
+     &                     +uflux(2:ii+1,0:jj-1)
+        write (text,'(a9,i3)') 'uflux  k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) =  potvor(1:ii,  1:jj  )
+     &                     +potvor(2:ii+1,1:jj  )
+        write (text,'(a9,i3)') 'potvor k=',k
+        call pipe_compare(util4, iv,text)
+        util4(1:ii,1:jj) =  vflux1(1:ii,  1:jj  )
+     &                     -vflux1(1:ii,  0:jj-1)
+     &                     +vflux3(1:ii,  1:jj  )
+     &                     -vflux2(1:ii,  1:jj  )
+        write (text,'(a9,i3)') 'vflux  k=',k
+        call pipe_compare(util4, iv,text)
+        write (text,'(a9,i3)') 'v.n    k=',k
+        call pipe_compare(v(1-nbdy,1-nbdy,k,n),iv,text)
+      endif
+c
+cdiag if (k.eq.1) then
+cdiag if     (itest.gt.0 .and. jtest.gt.0) then
+cdiag write (lp,101) nstep
+cdiag do j=jtest-1,jtest+1
+cdiag do i=itest-1,itest+1
+cdiag if     (iv(i,j).ne.1) then
+cdiag write (lp,'(2i5,i3,2f8.3)') i+i0,j+j0,k,
+cdiag.  0.0,0.0
+cdiag else
+cdiag write (lp,'(2i5,i3,8f8.3)') i+i0,j+j0,k,
+cdiag.  util4(i,j),v(i,j,k,n),
+cdiag.  -delt1*grady(i,j),
+cdiag.  -delt1*advv(i,j),
+cdiag.  -delt1*
+cdiag.   .125*(uflux(i,j  )+uflux(i+1,j  )+uflux(i,j-1)+uflux(i+1,j-1))
+cdiag.       *(potvor(i,j)+potvor(i+1,j)),
+cdiag.  -delt1*vbrhs(i,j),
+cdiag.   delt1*stress(i,j),
+cdiag.   delt1*diffv(i,j)
+cdiag endif
+cdiag enddo !i
+cdiag enddo !j
+cdiag endif !test
+cdiag endif !k==1
+ 101    format(i9,8x,'vold    vnew   gradp  nonlin   corio',
+     &3x,'vbrhs  stress    fric')
+c
+ 9    continue  ! k=1,kk
+c
+c --- update dpu.m,dpv.m to time level t   with RA time smoother
+c --- update dpu.n,dpv.n to time level t+1
+c
+      margin = 1
+c
+*        wtime1( 7) = wtime()
+c --- p is from dp.m, see momtum_hs
+      call dpudpv(dpu(1-nbdy,1-nbdy,1,m),
+     &            dpv(1-nbdy,1-nbdy,1,m),
+     &            p,depthu,depthv, max(0,margin-1))
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k)
+!$OMP&           SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isp(j)
+          do i=max(1-margin,ifp(j,l)),min(ii+margin,ilp(j,l))
+            do k=1,kk
+              p(i,j,k+1) = p(i,j,k) + dp(i,j,k,n)
+            enddo !k
+          enddo !i
+        enddo !l
+      enddo !j
+c
+      call dpudpv(dpu(1-nbdy,1-nbdy,1,n),
+     &            dpv(1-nbdy,1-nbdy,1,n),
+     &            p,depthu,depthv, max(0,margin-1))
+c    
+c --- convert from dpv*vtot to vtot to v
+c --- substitute depth-weighted averages at massless grid points.
+c --- extract barotropic velocities generated during most recent
+c --- baroclinic time step and use them to force barotropic flow field.
+c
+      margin = 0
+c
+!$OMP PARALLEL DO PRIVATE(j,l,i,k,q,sum_m,sum_n)
+!$OMP&         SCHEDULE(STATIC,jblk)
+      do j=1-margin,jj+margin
+        do l=1,isu(j)
+          do i=max(1-margin,ifu(j,l)),min(ii+margin,ilu(j,l))
+            k=1
+              u(i,j,k,m) = u(i,j,k,m)/max(dpu(i,j,k,m),dpthin)
+              u(i,j,k,n) = u(i,j,k,n)/max(dpu(i,j,k,n),dpthin)
+              sum_m      = u(i,j,k,m)*    dpu(i,j,k,m)
+              sum_n      = u(i,j,k,n)*    dpu(i,j,k,n)
+            do k=2,kk
+              u(i,j,k,m) = u(i,j,k,m)/max(dpu(i,j,k,m),dpthin)
+              q          = min(dpu(i,j,k,m),cutoff)
+              u(i,j,k,m) = (u(i,j,k,m)*q+u(i,j,k-1,m)*(cutoff-q))*
+     &                     qcutoff
+              u(i,j,k,n) = u(i,j,k,n)/max(dpu(i,j,k,n),dpthin)
+              q          = min(dpu(i,j,k,n),cutoff)
+              u(i,j,k,n) = (u(i,j,k,n)*q+u(i,j,k-1,n)*(cutoff-q))*
+     &                     qcutoff
+              sum_m      = sum_m + u(i,j,k,m)*dpu(i,j,k,m)
+              sum_n      = sum_n + u(i,j,k,n)*dpu(i,j,k,n)
+            enddo !k
+c
+            sum_m = sum_m/depthu(i,j)
+            sum_n = sum_n/depthu(i,j)
+            do k=1,kk
+              u(i,j,k,m) = u(i,j,k,m) - sum_m
+              u(i,j,k,n) = u(i,j,k,n) - sum_n
+            enddo !k
+c
+            utotn(i,j) = dt1inv*(sum_n - ubavg(i,j,n))  !for barotp
+          enddo !i
+        enddo !l
+c         
+        do l=1,isv(j)
+          do i=max(1-margin,ifv(j,l)),min(ii+margin,ilv(j,l))
+            k=1
+              v(i,j,k,m) = v(i,j,k,m)/max(dpv(i,j,k,m),dpthin)
+              v(i,j,k,n) = v(i,j,k,n)/max(dpv(i,j,k,n),dpthin)
+              sum_m      = v(i,j,1,m)*    dpv(i,j,1,m)
+              sum_n      = v(i,j,1,n)*    dpv(i,j,1,n)
+            do k=2,kk
+              v(i,j,k,m) = v(i,j,k,m)/max(dpv(i,j,k,m),dpthin)
+              q          = min(dpv(i,j,k,m),cutoff)
+              v(i,j,k,m) = (v(i,j,k,m)*q+v(i,j,k-1,m)*(cutoff-q))*
+     &                     qcutoff
+              v(i,j,k,n) = v(i,j,k,n)/max(dpv(i,j,k,n),dpthin)
+              q          = min(dpv(i,j,k,n),cutoff)
+              v(i,j,k,n) = (v(i,j,k,n)*q+v(i,j,k-1,n)*(cutoff-q))*
+     &                     qcutoff
+              sum_m      = sum_m + v(i,j,k,m)*dpv(i,j,k,m)
+              sum_n      = sum_n + v(i,j,k,n)*dpv(i,j,k,n)
+            enddo !k
+c
+            sum_m = sum_m/depthv(i,j)
+            sum_n = sum_n/depthv(i,j)
+            do k=1,kk
+              v(i,j,k,m) = v(i,j,k,m) - sum_m
+              v(i,j,k,n) = v(i,j,k,n) - sum_n
+            enddo !k
+c
+            vtotn(i,j) = dt1inv*(sum_n - vbavg(i,j,n))  !for barotp
+          enddo !i
+        enddo !l
+      enddo !j - do 30 loop
+!$OMP END PARALLEL DO
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        do k= 1,kk
+          write (text,'(a9,i3)') 'dpu.m  k=',k
+          call pipe_compare(dpu(1-nbdy,1-nbdy,k,m),iu,text)
+          write (text,'(a9,i3)') 'dpu.n  k=',k
+          call pipe_compare(dpu(1-nbdy,1-nbdy,k,n),iu,text)
+          write (text,'(a9,i3)') 'u.n(2) k=',k
+          call pipe_compare(  u(1-nbdy,1-nbdy,k,n),iu,text)
+          write (text,'(a9,i3)') 'dpv.m  k=',k
+          call pipe_compare(dpv(1-nbdy,1-nbdy,k,m),iv,text)
+          write (text,'(a9,i3)') 'dpv.n  k=',k
+          call pipe_compare(dpv(1-nbdy,1-nbdy,k,n),iv,text)
+          write (text,'(a9,i3)') 'v.n(2) k=',k
+          call pipe_compare(  v(1-nbdy,1-nbdy,k,n),iv,text)
+        enddo !k
+        write (text,'(a9,i3)') 'utotn  k=',kk
+        call pipe_compare(utotn, iu,text)
+        write (text,'(a9,i3)') 'vtotn  k=',kk
+        call pipe_compare(vtotn, iv,text)
+      endif
+c
+*        wtime1(10) = wtime()
+*        if     (mod(nstep,100).eq.0) then
+* ---      timer printout.
+*          do i= 2,10
+*            write(lp,'(4x,a,i3,a,f9.5,a)')
+*    &        'momtum   section',i,' time =',
+*    &        wtime1(i) - wtime1(i-1),' seconds'
+*          enddo
+*          do i= 2,20
+*            wtimes=0.0
+*            do k=1,kk
+*              wtimes = wtimes + (wtime2(i,k)-wtime2(i-1,k))
+*            enddo
+*            write(lp,'(4x,a,i3,a,f9.5,a)')
+*    &        'momtum k section',i,' time =',
+*    &        wtimes,' seconds'
+*          enddo
+*          call flush(lp)
+*        endif
+c
+      if     (lpipe .and. lpipe_momtum) then
+c ---   compare two model runs.
+        write (text,'(a9,i3)') 'u.n(3) k=',1
+        call pipe_compare(u(1-nbdy,1-nbdy,1,n),iu,text)
+        write (text,'(a9,i3)') 'v.n(3) k=',1
+        call pipe_compare(v(1-nbdy,1-nbdy,1,n),iv,text)
+      endif
+c
+      return
+      end
+c
+c
+c> Revision history
+c>
+c> Mar. 1995 - changed min.depth in pot.vort. calculation from 1 mm to 1 m
+c>             (loops 812,802,803)
+c> July 1997 - transferred -visc- and -vort- from common to local
+c> July 1997 - eliminated 3-D arrays -uold,vold- (used in time smoothing)
+c> Aug. 1997 - added some loops that used to be in barotp.f
+c> Aug. 1997 - transferred -wgtia,wgtib,wgtja,wgtjb- from common to local
+c> Oct. 1999 - ekman depth calculation added in loops 66-70 - based on ustar
+c>             which is calculated from the stress
+c> Oct. 1999 - surface stress terms handled differently depending on m.l.
+c>             model
+c> Dec. 1999 - switched to biharmonic friction
+c> Jan. 2000 - added biharm to select between laplacian and biharmonic
+c> Jan. 2000 - ekman depth calculation removed - surface momentum flux
+c>             distributed within layer one for all mixed layer models
+c> Jan. 2000 - added r. bleck's re-formulation of -pgfx- and -pgfy-
+c>             to properly commute pressure torque from layer to layer
+c> Jul. 2000 - loop reordering and logic changes for OpenMP
+c> Aug. 2000 - loop 117 executed only when hybrid vertical coordinate is used
+c> Oct. 2001 - replaced biharm with veldf[24] and visco[24]
+c> Sep. 2004 - kapref selects one of three thermobaric reference states
+c> Jun. 2006 - split out momtum_hs, for initial ssh calculation
+c> Nov. 2006 - inserted volume-force for tide
+c> Apr. 2007 - added drglim, implicit or CFL-limited explicit bottom drag
+c> Apr. 2007 - added dragrh, linear tidal drag based on bottom roughness
+c> Apr. 2007 - btrlfr: moved [uvp]bavg assignment to barotp
+c> Jun. 2007 - added momtum4
+c> Mar  2009 - more accurate kappaf, with potential density
+c> Now  2009 - several bugfixes to momtum4
+c> Mar  2010 - remove   anti-drag on detided velocity
+c> Apr  2010 - put back anti-drag on detided velocity
+c> Apr  2011 -  cbarp(i,j) in place of cbar
+c> Jul  2011 - salfac(i,j) in place of tidsal
+c> Jul  2011 - modified momtum4 based on NERSC 2.1.03_MPI momtum_quick
+c> Jul  2011 - modified momtum4 to use viscp and viscq
+c> Jul  2011 - modified momtum4 to use local arrays for y advection
+c> Jul  2011 - modified momtum4 to always use v 0 -v for extrapolation
+c> Aug  2011 - use ra2fac for wuv1 and wuv2 (so now wuv==wts)
+c> Aug  2011 - replaced dpold,dpoldm with dpo
+c> Aug  2011 - reworked Robert-Asselin time filter
+c> Sep  2011 -    cbp(i,j) in place of cb
+c> Jan  2012 - added thkcdw
+c> July 2012 - bugfix for bottom drag when depth < thkbot
+c> July 2012 - thkbop is now always based on thkbot (even for bblkpp)

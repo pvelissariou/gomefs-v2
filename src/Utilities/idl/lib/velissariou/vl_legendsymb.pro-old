@@ -1,0 +1,322 @@
+PRO VL_LegendSymb,           $
+      position,              $
+      label,                 $
+      charsize = charsize,   $
+      alignment = alignment, $
+      color = color,         $
+      symbol = symbol,       $
+      symsize = symsize,     $
+      thick = thick,         $
+      title = title,         $
+      fill = fill,           $
+      frame = frame,         $
+      fr_color = fr_color,   $
+      fr_thick = fr_thick,   $
+      fr_style = fr_style,   $
+      bk_color = bk_color,   $
+      rotation = rotation,   $
+      scale = scale,         $
+      legdims = legdims,     $
+      Get = get,             $
+      _Extra = extra
+;+++
+; NAME:
+;	VL_LegendSymb
+;
+; VERSION:
+;       1.0
+;
+; AUTHOR:
+;       Panagiotis Velissariou (Velissariou.1@osu.edu)
+;
+; PURPOSE:
+;	This procedure plots a legend for line plots.
+;
+; CATEGORY:
+;	Graphics
+;
+; CALLING SEQUENCE:
+;	VL_LegendSymb, Position, Label, [keywords]
+;
+;       position    :   A 2-element vector containing the position
+;                        ([x,y]) in normal coordinates of the lower left
+;                        corner of the box containing the legend.
+;	label       :   A vector, of type string, containing the labels
+;                        for each line.
+;
+; KEYWORD PARAMETERS:
+;       charsize    :   The height of the characters to be used when drawing
+;                        the text.
+;                        Default :  1.0
+;       alignment   :   The alignment of the labels within the legend area.
+;                        Default :  1.0
+;       color       :   A vector, of type integer, containing the color index
+;                        values of the lines.
+;                        Default :  Black
+;       symbol      :   A vector, of type integer, containing the symbol type
+;                        index value for each symbol.
+;                        Default :  0
+;       symsize     :   The size of the symbol.
+;                        Default :  charsize
+;       thick       :   A vector, of type integer, containing the line
+;                        thickness value for each line.
+;                        Default :  1.0
+;       title       :   A string containing the title of the legend. The size
+;                        of the title text is 1.25 * charsize
+;                        Default :  '' (no title)
+;       fill        :   Set this keyword if you want the legend area to
+;                        have a background color.
+;                        Default :  no fill
+;       frame       :   Set this keyword if you want the legend area to
+;                        have a frame.
+;                        Default :  no frame
+;       fr_color    :   This is the color index to be used when drawing the
+;                        frame.
+;                        Default :  Black
+;       fr_thick    :   This is the thickness to be used when drawing the
+;                        frame.
+;                        Default :  1.0
+;       fr_style    :   This is the type of line to be used when drawing the
+;                        frame.
+;                        Default :  0 (solid line)
+;       bk_color    :   This is the index for the background color to be used
+;                        when the legend area is to be filled.
+;                        Default :  !P.BACKGROUND
+;       rotation    :   Use this keyword to rotate the legend counter-clock-wise
+;                        at an angle (in degrees).
+;                        Default :  0.0 (no rotation)
+;       scale       :   Use this keyword to scale the legend by a factor.
+;                        Default :  1.0 (no scaling)
+;       legdims     :   A named variable that holds the coordinates of the horizontal
+;                        box containing the legend area (including the title) that is,
+;                        legdims = [xmin, ymin, xmax, ymax] and:
+;                        width = xmax -xmin, height = ymax - ymin.
+;                        Default :  NONE
+;
+; PROCEDURE:
+;	This procedure uses the input values to construct an appropriate
+;	box containing the legend for a plot with symbols.
+;
+; EXAMPLE:
+;	Create a legend for a two-line plot (colors red and green).
+;	  tek_color
+;	  VL_LegendSymb, [0.2,0.2], ['Red','Green'], color=[2,3], $
+;                        title='Legend'
+;
+; MODIFICATION HISTORY:
+;	Created February 16 2005 by Panagiotis Velissariou (velissariou.1@osu.edu).
+;+++
+
+on_error, 2
+
+; ---------- check for the input variables
+; Number of lines
+nLabels = n_elements(label)
+if (nLabels eq 0) or (size(label, /type) ne 7) then begin
+  message, 'please supply a string or string vector for <label>'
+endif else begin
+  thisLabel = label[*]
+endelse
+
+; Character size
+thisCharsize = n_elements(charsize) eq 0 ? 1.0 : float(charsize)
+
+; Character size
+thisSymsize = n_elements(symsize) eq 0 ? thisCharsize : float(symsize)
+
+; Alignment of the labels
+thisAlign = n_elements(alignment) eq 0 ? 0.0 : 1.0 - (1.0 - abs(float(alignment[0])) > 0.0)
+if (thisAlign lt 0.5) then thisAlign = 0.0
+if (thisAlign gt 0.5) then thisAlign = 1.0
+
+; Symbol colors
+thisColor = n_elements(color) eq 0 ? !P.COLOR + 0 * intarr(nLabels) : fix(color)
+if n_elements(thisColor) lt nLabels then thisColor = thisColor[0] + 0 * intarr(nLabels)
+
+; Symbol types
+thisSymbol = n_elements(symbol) eq 0 ? 0 * intarr(nLabels) : 17 - (17 - fix(abs(symbol)) > 0)
+if n_elements(thisSymbol) lt nLabels then thisSymbol = thisSymbol[0] + 0 * intarr(nLabels)
+
+; Symbol thicknesses
+thisThick = n_elements(thick) eq 0 ? 1 + 0 * intarr(nLabels) : abs(float(thick))
+if n_elements(thisThick) lt nLabels then thisThick = thisThick[0] + 0 * intarr(nLabels)
+
+; Legend title
+thisTitle = n_elements(title) eq 0 ? '' : strtrim(title, 2)
+do_title = strlen(thisTitle) eq 0 ? 0 : 1
+TitleFac = 1.25
+thisTitleSize = TitleFac * thisCharsize
+
+; The legend frame (if any)
+thisFr_Color = n_elements(fr_color) eq 0 ? !P.COLOR : 255 - (255 - fix(abs(fr_color)) > 0)
+thisFr_Thick = n_elements(fr_thick) eq 0 ? 1.0 : fr_thick
+thisFr_Style = n_elements(fr_style) eq 0 ? 0 : 5 - (5 - fix(abs(fr_style)) > 0)
+
+; Background color
+thisBk_Color  = n_elements(bk_color) eq 0 ? !P.BACKGROUND : 255 - (255 - fix(abs(bk_color)) > 0)
+
+; Rotation of the legend
+thisRotation  = n_elements(rotation) eq 0 ? 0.0 : float(rotation[0])
+
+; Scaling of the legend
+thisScale  = n_elements(scale) eq 0 ? 1.0 : float(scale[0])
+
+; Determine the legend box corner positions
+xpos = position[0]
+ypos = position[1]
+
+; Adjust for multiple plots in the page
+if !P.MULTI[1] ne 0 then begin
+  if !P.MULTI[0] eq 0 then $
+    pmulti0 = !P.MULTI[1] * !P.MULTI[2] $
+  else $
+    pmulti0 = !P.MULTI[0]
+  xpos = (pmulti0 + !P.MULTI[1] - 1) / !P.MULTI[1] - pmulti0 / 1.0 / !P.MULTI[1] $
+         + xpos / !P.MULTI[1]
+endif
+if !P.MULTI[2] ne 0 then begin
+  if !P.MULTI[0] eq 0 then $
+    pmulti0 = !P.MULTI[1] * !P.MULTI[2] $
+  else $
+    pmulti0 = !P.MULTI[0]
+  ypos = ( ypos + (pmulti0-1) / !P.MULTI[1] ) / 1.0 / !P.MULTI[2]
+endif
+
+; Character scale
+if (!P.MULTI[2] gt 1) then begin
+  thisCharsize = thisCharsize / !P.MULTI[2]
+  thisSymsize = thisSymsize / !P.MULTI[2]
+  thisTitleSize = TitleFac * thisCharsize
+endif
+
+; Determine the legend dimensions for horizontal positioning
+labdims = TextDims(thisLabel, origin = [xpos, ypos], $
+                   charsize = thisCharsize, orientation = 0.0)
+
+SymbHeight = thisSymsize * (float(!D.Y_CH_SIZE) / float(!D.Y_VSIZE))
+SymbWidth  = thisSymsize * (float(!D.X_CH_SIZE) / float(!D.X_VSIZE))
+
+LabHeight = labdims[3,*] - labdims[1,*] > SymbHeight
+LabWidth  = labdims[2,*] - labdims[0,*]
+LabSpace  = 0.5 * LabHeight
+yOff = max(LabSpace)
+xOff = yOff * float(!D.Y_VSIZE) / float(!D.X_VSIZE)
+LabOff = xOff
+
+maxLabWidth = max(LabWidth)
+LegHeight = total(LabHeight) + (total(LabSpace) - LabSpace[0]) + 2 * yOff
+LegWidth  = SymbWidth + maxLabWidth + 2 * xOff + LabOff
+
+; Determine the coordinates of the individual components of the legend
+nL0 = 4
+nL1 = nL0 + nLabels - 1
+nT0 = nL1 + 1
+nT1 = nT0 + nLabels - 1
+
+nLegCoord = 4 + (nL1 - nL0 + 1) + (nT1 - nT0 + 1)
+if do_title then nLegCoord = nLegCoord + 1
+
+LegCoord = fltarr(2, nLegCoord)
+LegCoord[*, 0] = [ xpos, ypos]
+LegCoord[*, 1] = [ xpos + LegWidth, ypos]
+LegCoord[*, 2] = [ xpos + LegWidth, ypos + LegHeight]
+LegCoord[*, 3] = [ xpos, ypos + LegHeight]
+
+xx  = xpos + xOff
+xx1 = xx + SymbWidth + LabOff + thisAlign * maxLabWidth
+for i = 0, nLabels -1 do begin
+  j = nL0 + i
+  k = nT0 + i
+  yy = LegCoord[1, 3] - yOff - total(LabHeight[0:i]) - i * LabSpace[i]
+  LegCoord[*, j] = [ xx + SymbWidth / 2.0,  yy + 0.4 * LabHeight[0, i]]
+  LegCoord[*, k] = [ xx1, yy]
+endfor
+
+; The last object in the LegCoord array is the title
+if do_title then begin
+  titledims = TextDims(thisTitle, origin = [xpos, ypos], $
+                       charsize = thisTitleSize, orientation = 0.0)
+  xx = (LegCoord[0, 0] + LegCoord[0, 1]) / 2.0
+  yy = LegCoord[1, 3] + (titledims[3] - titledims[1]) / 2.0
+  LegCoord[*, nLegCoord - 1] = [xx, yy]
+endif
+
+; Adjust for possible rotation/scaling of the legend
+LegCoord = Transform2DShape(LegCoord, rotation = thisRotation, $
+                 center = [xpos, ypos], scale = thisScale)
+
+if arg_present(legdims) then begin
+  if do_title then begin
+    titledims = TextDims(thisTitle, $
+                         origin = [LegCoord[0, nLegCoord - 1], LegCoord[1, nLegCoord - 1]], $
+                         charsize = thisScale * thisTitleSize, $
+                         alignment = 0.5, orientation = thisRotation)
+    min_xx = min([transpose(LegCoord[0, *]), titledims[0], titledims[2]], max = max_xx)
+    min_yy = min([transpose(LegCoord[1, *]), titledims[1], titledims[3]], max = max_yy)
+  endif else begin
+    min_xx = min(LegCoord[0, *], max = max_xx)
+    min_yy = min(LegCoord[1, *], max = max_yy)
+  endelse
+  legdims = [min_xx, min_yy, max_xx, max_yy]
+endif
+
+if (keyword_set(get)) then return
+
+; ---------- convert to device coordinates
+LegCoord = convert_coord(LegCoord, /normal, /to_device)
+xx = [transpose(LegCoord[0, 0:3]), LegCoord[0, 0]]
+yy = [transpose(LegCoord[1, 0:3]), LegCoord[1, 0]]
+
+; ---------- plot the legend
+; Adjust for scaling
+thisCharsize  = thisScale * thisCharsize
+thisSymsize  = thisScale * thisSymsize
+thisTitleSize = thisScale * thisTitleSize
+;thisFr_Thick  = thisScale * thisFr_Thick
+
+; Draw the legend background
+if keyword_set(fill) then $
+  polyfill, xx, yy, color = thisBk_Color, /device
+
+; Draw the legend frame
+if keyword_set(frame) then $
+  plots, xx, yy, color = thisFr_Color, thick = thisFr_Thick, linestyle = thisFr_Style, $
+         /device
+
+; Draw the symbols
+saved_PT = !P.T
+for i = 0, nLabels - 1 do begin
+  j = nL0 + i
+  xx = LegCoord[0, j]
+  yy = LegCoord[1, j]
+
+  if (abs(thisRotation) gt 0.0) then begin
+    tmp_coord = convert_coord(xx, yy, /device, /to_normal)
+    xxn = tmp_coord[0]
+    yyn = tmp_coord[1]
+    t3dmat = T3DGet([xxn, yyn], rotation = thisRotation)
+    !P.T = t3dmat
+    plots, xx, yy, psym = sym(thisSymbol[i], thick = thisThick[i]), symsize = thisSymsize, $
+           color = thisColor[i], thick = thisThick[i], /t3d, /device
+  endif else begin
+    plots, xx, yy, psym = sym(thisSymbol[i], thick = thisThick[i]), symsize = thisSymsize, $
+           color = thisColor[i], thick = thisThick[i], /device
+  endelse
+endfor
+!P.T = saved_PT
+ 
+; Draw the labels
+xx = transpose(LegCoord[0, nT0:nT1])
+yy = transpose(LegCoord[1, nT0:nT1])
+xyouts, xx, yy, thisLabel, charsize = thisCharsize, $
+        alignment = thisAlign, orientation = thisRotation, /device
+
+; Draw the legend title
+if do_title then $
+  xyouts, LegCoord[0, nLegCoord - 1], LegCoord[1, nLegCoord - 1], title, $
+          charsize = thisTitleSize, alignment = 0.5, $
+          orientation = thisRotation, /device
+
+return
+
+end

@@ -1,0 +1,21 @@
+# Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+#                                 <velissariou.1@osu.edu>
+# Version: 1.0
+#
+# Version - 1.0 Mon Aug 31 2015
+
+####################
+# Define here what modeling components are being used.
+# VALID VALUES: >=1/yes, <=0/no or empty
+# These are set by the build script during the compilation stage.
+# If for some reason the values are not what you want you can modify
+# these variables manually (at your own risk).
+COUPLED_SYSTEM=no
+USE_MPI=no
+USE_OpenMP=no
+USE_ROMS=no
+USE_HYCOM=no
+USE_WRF=no
+USE_SWAN=no
+USE_SED=no
+USE_ICE=no

@@ -1,0 +1,38 @@
+LocDate="2015-05-06 00:08:22"
+BegDate="2015-04-30 00:00:00"
+FcastDate="2015-05-05 00:00:00"
+EndDate="2015-05-10 00:00:00"
+MODE="forecast"
+MODE_PFX="forecast-"
+MODE_STR="forecast-2015050500"
+DataDir="/Net/mars/takis/FORECAST/Data/forecast-2015050500"
+OutDir="/Net/mars/takis/FORECAST/Output/forecast-2015050500"
+BryDir="/Net/mars/takis/FORECAST/Data/forecast-2015050500/boundary"
+IniDir="/Net/mars/takis/FORECAST/Data/forecast-2015050500/ini"
+IdlDir="/Net/mars/takis/FORECAST/idl"
+MatDir="/Net/mars/takis/FORECAST/matlab"
+LogDir="/Net/mars/takis/FORECAST/Logs/forecast-2015050500"
+PlotDir="/Net/mars/takis/FORECAST/plots/forecast-2015050500"
+WebDir="/Net/mars/takis/FORECAST/forecasts/forecast-2015050500"
+WpsDir="/Net/mars/takis/FORECAST/wps"
+DATA_INTERVAL=6
+OcnSST=1
+MODULE_FILES="intel12 intel12-openmpi"
+
+CONVERT="convert"
+
+IDL_CMD="idl -quiet -queue"
+
+MAT_CMD="matlab -nodesktop -nosplash"
+
+USE_PARALLEL=1
+GPARAL="parallel"
+GPARAL_OPTS_GLB="--gnu --no-run-if-empty -vv --verbose --progress --halt 1"
+GPARAL_OPTS_SSH="--filter-hosts --slf .."
+GPARAL_OPTS_TIME="--timeout 3600"
+GPARAL_OPTS_RESUME="--resume-failed --retries 1"
+
+GLBHC_I0=2198
+GLBHC_I1=2823
+GLBHC_J0=1630
+GLBHC_J1=2050

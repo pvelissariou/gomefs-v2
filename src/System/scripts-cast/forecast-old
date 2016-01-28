@@ -1,0 +1,247 @@
+#!/bin/bash
+
+# Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+#                                 <velissariou.1@osu.edu>
+# Version: 1.0
+#
+# Version - 1.0 Sun Feb 23 2014
+
+# Make sure that the current working directory is in the PATH
+[[ ! :$PATH: == *:".":* ]] && export PATH="${PATH}:."
+
+scrNAME=`basename $0`
+
+
+#------------------------------------------------------------
+# SOURCE THE FORECAST FUNCTIONS
+if [ -f functions_cast ]; then
+  source functions_cast
+else
+  echo " ### ERROR:: in ${scrNAME}"
+  echo "     Cannot load the required file: functions_cast"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+fi
+#------------------------------------------------------------
+
+
+####################
+# Get the local date
+if [ "X${1}" = "X" ]; then
+#  getInpTimeStamp "$( date '+%Y-%m-%d %H:%M:%S' )"
+  getInpTimeStamp "$( date -d "2014-02-28 12:00:00" '+%Y-%m-%d %H:%M:%S' )"
+else
+  getInpTimeStamp "${1}"
+fi
+
+
+####################
+# Get the appropriate forecast time
+fDIFF=
+fTIMES=
+fHR=
+for i in ${CAST_CYCLES}
+do
+  thisFHR=$( getPosInteger ${i} )
+  if [ $? -ne 0 ]; then
+    echo " ### ERROR:: in ${scrNAME}"
+    echo "     Forecast times should be: CAST_CYCLES >= 0"
+    echo "       CAST_CYCLES = ${CAST_CYCLES:-UNDEF}"
+    echo "     Exiting now ..."
+    echo
+    exit 1
+  else
+    if [ ${thisFHR} -gt 23 ]; then
+      echo " ### ERROR:: in ${scrNAME}"
+      echo "     Forecast time should be: 0 <= CAST_TIME <= 23"
+      echo "       CAST_CYCLES = ${CAST_CYCLES:-UNDEF}"
+      echo "     Exiting now ..."
+      echo
+      exit 1
+    fi
+  fi
+
+  thisDIFF=$( getPosInteger $(( ${myHR} - ${thisFHR} )) )
+  if [ $? -eq 0 ]; then
+    if [ ${thisDIFF} -eq 0 ]; then
+      fHR=${thisFHR}
+      fDIFF=
+      fTIMES=
+      break
+    else
+      fDIFF="${fDIFF} ${thisDIFF}"
+      fTIMES="${fTIMES} ${thisFHR}"
+    fi
+  fi
+done
+
+if [ -z "${fHR:-}" ]; then
+  fDIFF=( ${fDIFF} )
+  fTIMES=( ${fTIMES} )
+
+  minVAL=$( min "${fDIFF[@]}" )
+  for ((i = 0; i < ${#fDIFF[@]}; i++))
+  do
+    if [ ${fDIFF[i]} -eq ${minVAL} ]; then
+      fHR=${fTIMES[i]}
+      break
+    fi
+  done
+fi
+unset i minVAL fDIFF fTIMES
+
+FcastDate="$( Fcast_DateStamp "${myYR}-${myMO}-${myDA} ${fHR}:0:0" )"
+
+
+####################
+# Get the dates for the start and end times of the simulation
+prevDAYS=`getPosInteger ${CAST_INIT_DAYS}`
+if [ $? -ne 0 ]; then
+  echo " ### ERROR:: in ${scrNAME}"
+  echo "     Hindcast length should be greater than 0 days"
+  echo "       CAST_INIT_DAYS = ${CAST_INIT_DAYS:-UNDEF}"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+else
+  if [ ${prevDAYS} -lt 2 ]; then
+    echo " ### ERROR:: in ${scrNAME}"
+    echo "     Hindcast length should be greater than 1 day"
+    echo "       CAST_INIT_DAYS = ${CAST_INIT_DAYS:-UNDEF}"
+    echo "     Exiting now ..."
+    echo
+    exit 1
+  fi
+fi
+
+nextDAYS=`getPosInteger ${CAST_LENGTH}`
+if [ $? -ne 0 ]; then
+  echo " ### ERROR:: in ${scrNAME}"
+  echo "     Forecast length should be greater than 0 days"
+  echo "       CAST_LENGTH = ${CAST_LENGTH:-UNDEF}"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+else
+  if [ ${prevDAYS} -lt 1 ]; then
+    echo " ### ERROR:: in ${scrNAME}"
+    echo "     Forecast length should be greater than 1 day"
+    echo "       CAST_LENGTH = ${CAST_LENGTH:-UNDEF}"
+    echo "     Exiting now ..."
+    echo
+    exit 1
+  fi
+fi
+
+BegDate=$( date -d "`date -d "${FcastDate}"` -${prevDAYS} days" '+%Y-%m-%d 00:00:00' )
+EndDate=$( date -d "`date -d "${FcastDate}"`  ${nextDAYS} days" '+%Y-%m-%d 00:00:00' )
+####################
+
+
+#################### Set some forecast variables
+CAST_STR="forecast-$( Fcast_CycleStamp "${FcastDate}" )"
+
+DataDir=${CAST_DATA:-.}${CAST_STR:+/${CAST_STR}}
+DownloadDir=${DataDir}/download
+LogDir=${CAST_LOGS:-.}${CAST_STR:+/${CAST_STR}}
+OutDir=${CAST_OUT:-.}${CAST_STR:+/${CAST_STR}}
+PlotDir=${CAST_PLOTS:-.}${CAST_STR:+/${CAST_STR}}
+WebDir=${CAST_WEB:-.}${CAST_STR:+/${CAST_STR}}
+
+# Create the directories of the forecasting system if they do not exist
+makeDIR "${CAST_ROOT}"
+makeDIR "${CAST_DATA}"
+makeDIR "${CAST_BATH}"
+makeDIR "${CAST_BDRY}"
+makeDIR "${CAST_INIT}"
+makeDIR "${CAST_WGHT}"
+makeDIR "${CAST_LOGS}"
+makeDIR "${CAST_PLOTS}"
+makeDIR "${CAST_OUT}"
+makeDIR "${CAST_IDL}"
+makeDIR "${CAST_WEB}"
+
+makeDIR "${DataDir}"
+makeDIR "${OutDir}"
+makeDIR "${LogDir}"
+makeDIR "${PlotDir}"
+makeDIR "${WebDir}"
+####################
+
+
+############################################################
+##### BEG:: Gather all required data
+############################################################
+
+# (1) Get the GFS data
+file_log="${LogDir:+${LogDir}/}download_gfs.log"
+[ -f ${file_log} ] && rm -f ${file_log}
+
+echo "Downloading the GFS data in the background ..."
+getdata_gfs.sh "${FcastDate}" "${BegDate}" "${EndDate}" "${DataDir}" > ${file_log} 2>&1 &
+
+# (2) Get the HYCOM data
+file_log="${LogDir:+${LogDir}/}download_hycom.log"
+[ -f ${file_log} ] && rm -f ${file_log}
+
+echo "Downloading the HYCOM data in the background ..."
+getdata_hycom.sh "${BegDate}" "${EndDate}" "${DataDir}" > ${file_log} 2>&1 &
+
+# Wait for the above processes to finish
+procs="getdata_gfs.sh getdata_hycom.sh ncks wget"
+waitForProcesses "${procs}" --sleep=20 --timeout=3600 --echo
+
+############################################################
+##### END:: Gather all required data
+############################################################
+
+
+###########################################################
+##### BEG:: Generate the required model initial & boundary conditions
+############################################################
+
+# (1) Generate the WRF initial/boundary conditions
+file_log="${LogDir:+${LogDir}/}inputs_wrf.log"
+[ -f ${file_log} ] && rm -f ${file_log}
+
+echo "Generating the WRF initial/boundary conditions in the background ..."
+make_inputs_wrf.sh "${BegDate}" "${EndDate}" "${DataDir}" > ${file_log} 2>&1 &
+
+# (2) Generate the ROMS initial/boundary conditions
+file_log="${LogDir:+${LogDir}/}inputs_roms.log"
+[ -f ${file_log} ] && rm -f ${file_log}
+
+echo "Generating the ROMS initial/boundary conditions in the background ..."
+make_inputs_roms.sh "${BegDate}" "${EndDate}" "${DataDir}" "${LogDir}" > ${file_log} 2>&1 &
+
+# Wait for the above processes to finish
+procs="make_inputs_wrf.sh run_wps.sh geogrid.exe ungrib.exe metgrid.exe real.exe
+       make_inputs_roms.sh batch-make"
+waitForProcesses "${procs}" --sleep=20 --timeout=3600 --echo
+
+###########################################################
+##### END:: Generate the required model initial & boundary conditions
+############################################################
+
+
+# Run the model
+echo "Running the forecast ..."
+run-forecast.sh -c "${CAST_STR:-}" -ini -i coupling.in -date1 "${BegDate}" -date2 "${EndDate}" -dat "${CAST_DATA}"
+
+
+###########################################################
+##### BEG:: Generate the model output plots, animations & web pages
+############################################################
+
+# Create the ouput plots
+echo "Generating the ouput plots and animations for the forecast ..."
+
+# Create the web pages
+echo "Generating the updated web pages for the forecast ..."
+
+###########################################################
+##### END:: Generate the model output plots, animations & web pages
+############################################################
+
+exit 0

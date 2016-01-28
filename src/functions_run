@@ -1,0 +1,5457 @@
+# Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+#                                 <velissariou.1@osu.edu>
+# Version: 1.4
+#
+# Version - 1.4 Sun Aug 23 2015
+# Version - 1.3 Thu Jul 17 2014
+# Version - 1.2 Fri Jul 26 2013
+# Version - 1.1 Sun Jul 21 2013
+# Version - 1.0 Thu Jun 27 2013
+
+set +u
+
+#------------------------------------------------------------
+# SOURCE THE UTILITY FUNCTIONS
+#
+if [ -f functions_common ]; then
+  source functions_common
+else
+  echo " ### ERROR:: in functions_run"
+  echo "     Cannot locate the file: functions_common"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+fi
+
+if [ -f models_env ]; then
+  source models_env
+else
+  echo " ### ERROR:: in functions_run"
+  echo "     Cannot locate the file: models_env"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+fi
+#------------------------------------------------------------
+
+
+############################################################
+##### RELATED FUNCTIONS TO INITIATE A MODEL RUN
+############################################################
+
+# -------------------------------------------------------
+# ParseArgsMsub()
+# Gets the supplied options to the script.
+# -------------------------------------------------------
+ParseArgsMsub()
+{
+  local nm_func=$( basename ${BASH_SOURCE[${#BASH_SOURCE[@]}-1]} )
+
+  local my_CASEID my_DATDIR my_MODFILES my_INP
+  local my_HOST my_HOSTFILE
+  local my_SIMBEG my_SIMEND my_CPUS my_INIT
+
+  my_CASEID="${ms_id}"
+  my_DATDIR="${ms_dat}"
+  my_SIMBEG="${ms_beg}"
+  my_SIMEND="${ms_end}"
+  my_INP="${ms_inp}"
+  my_INIT=$(String_getInteger "${ms_init:-0}" 0)
+  my_MODFILES="${ms_mods}"
+  my_HOST=$(String_getInteger "${ms_host:-0}" 0)
+
+  # Assign the values using the my_* variables (if they are set).
+  CASEID="${my_CASEID}"
+  SimBeg="${my_SIMBEG:-${SimBeg}}"
+  SimEnd="${my_SIMEND:-${SimEnd}}"
+  DATA_DIR="${my_DATDIR:-${DATA_DIR}}"
+  MODEL_INP="$( strTrim "${my_INP:-${MODEL_INP}}" 2 )"
+  FORCE_INI="${my_INIT:-0}"
+  MODFILES="${my_MODFILES}"
+
+  # MSUB/PBS environment variables
+  # PBS_O_HOST      -> The name of the host upon which the qsub command is running
+  # PBS_SERVER      -> The hostname of the pbs_server which qsub submits the job to
+  # PBS_O_QUEUE     -> The name of the original queue to which the job was submitted
+  # PBS_O_WORKDIR   -> The absolute path of the current working directory
+  #                    of the qsub command
+  # PBS_ARRAYID     -> Each member of a job array is assigned a unique identifier
+  # PBS_ENVIRONMENT -> Set to PBS_BATCH to indicate the job is a batch job, or to
+  #                    PBS_INTERACTIVE to indicate the job is a PBS interactive job,
+  #                    see -I option.
+  # PBS_JOBID       -> The job identifier assigned to the job by the batch system
+  # PBS_JOBNAME     -> The job name supplied by the user
+  # PBS_NODEFILE    -> The name of the file contain the list of nodes assigned to
+  #                    the job (for parallel and cluster systems)
+  # PBS_QUEUE       -> The name of the queue from which the job is executed
+  # PBS_O_HOME      -> The value of the HOME variable in the environment
+  # PBS_O_LANG      -> The value of the LANG variable in the environment
+  # PBS_O_LOGNAME   -> The value of the LOGNAME variable in the environment
+  # PBS_O_PATH      -> The value of PATH from submission environment
+  # PBS_O_MAIL      -> The value of the MAIL variable in the environment
+  # PBS_O_SHELL     -> The value of the SHELL variable in the environment
+  # PBS_O_TZ        -> The value of the TZ variable in the environment
+  # PBS_O_NODENUM   -> The node offset number
+  # PBS_O_VNODENUM  -> The vnode offset number
+  # PBS_VERSION     -> The version Number of Torque eg TORQUE-2.5.1
+  # PBS_MOMPORT     -> The active port for mom daemon
+  # PBS_TASKNUM     -> The number of tasks requested
+  # PBS_JOBCOOKIE   -> The job cookie
+  # PBS_SERVER      -> The server Running Torque
+  # PBS_JOBDIR      -> Pathname of job-specific staging and execution directory
+  # TMPDIR          -> The job-specific temporary directory for this job.
+
+  # Determine the cpus/cores requested from the musb script,
+  # we need to compare this value with the number of cpus
+  # requested by the models themselves
+  if [ -n ${PBS_NODEFILE:+1} ]; then
+    UserCPUS=$(cat ${PBS_NODEFILE} | wc -l)
+  fi
+
+  # If my_HOST is set to a value greater than 0, try
+  # to determine the hosts the msub job will run on
+  # and subsequently create a machinefile or list of hosts
+  if [ ${my_HOST} -gt 0 ]; then
+    [ -n ${PBS_NODEFILE:+1} ] && HOSTFILE="${PBS_NODEFILE}"
+  fi
+
+  return 0
+}
+############################################################
+
+
+############################################################
+##### RUNTIME RELATED FUNCTIONS
+############################################################
+Check_InputConfigs()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local -i myFLG modFLG=$( NumberOfActiveModels )
+
+  local models use_mods val_mods
+
+  # The environment variables USE_* should be already set before calling this function.
+  checkOceanModels
+    models=( ${ocnMODELS} )
+  use_mods=( ${ocnUSEMODS} )
+  val_mods=( ${ocnUSEVALS} )
+
+  Adjust_ModelEnvVars
+
+  if [ ${modFLG} -lt 1 ]; then
+    procError "need to define at least one of:" \
+              "  [COUPLED_SYSTEM, USE_OCEAN_MODEL, USE_WRF, USE_SWAN] to yes." \
+              "where OCEAN_MODEL is one of: ${models[@]}" \
+              "  COUPLED_SYSTEM  = ${COUPLED_SYSTEM:-no}" \
+              "  ${use_mods[0]:+${use_mods[0]} = ${val_mods[0]}}" \
+              "  ${use_mods[1]:+${use_mods[1]} = ${val_mods[1]}}" \
+              "  ${use_mods[2]:+${use_mods[2]} = ${val_mods[2]}}" \
+              "  ${use_mods[3]:+${use_mods[3]} = ${val_mods[3]}}" \
+              "  ${use_mods[4]:+${use_mods[4]} = ${val_mods[4]}}" \
+              "  USE_WRF  = ${USE_WRF:-no}" \
+              "  USE_SWAN = ${USE_SWAN:-no}"
+  fi
+
+  checkCPLFILE "${1}"
+  myFLG=${cplFLG}
+
+  if [ ${cplFLG} -le 0 ]; then
+    # Supported ocean models.
+    for ((icnt = 0; icnt < ${#models[@]}; icnt++))
+    do
+      Check_${models[${icnt}]}Config "${1}"
+    done
+
+    Check_WRFConfig  "${1}"
+    Check_SWANConfig "${1}"
+
+    myFLG=$(( ${wrfFLG} + ${ocnFLG} + ${swanFLG} ))
+
+    if [ ${myFLG} -ne 1 ]; then
+      procError "only one model should be in use in a no-coupled simulation:" \
+                "  COUPLED_SYSTEM  = ${COUPLED_SYSTEM:-no}" \
+                "  ${use_mods[0]:+${use_mods[0]} = ${val_mods[0]}}" \
+                "  ${use_mods[1]:+${use_mods[1]} = ${val_mods[1]}}" \
+                "  ${use_mods[2]:+${use_mods[2]} = ${val_mods[2]}}" \
+                "  ${use_mods[3]:+${use_mods[3]} = ${val_mods[3]}}" \
+                "  ${use_mods[4]:+${use_mods[4]} = ${val_mods[4]}}" \
+                "  USE_WRF  = ${USE_WRF:-no}" \
+                "  USE_SWAN = ${USE_SWAN:-no}"
+    fi
+  fi
+
+  if [ ${myFLG} -le 0 ]; then
+    procError "Found invalid configuration using the following inputs:" \
+              "          cplINP  = ${cplINP:-UNDEF}" \
+              "          wrfINP  = ${wrfINP:-UNDEF}" \
+              "          ocnINP  = ${ocnINP:-UNDEF}" \
+              "         swanINP  = ${swanINP:-UNDEF}" \
+              "  COUPLED_SYSTEM  = ${COUPLED_SYSTEM:-no}" \
+              "  ${use_mods[0]:+${use_mods[0]} = ${val_mods[0]}}" \
+              "  ${use_mods[1]:+${use_mods[1]} = ${val_mods[1]}}" \
+              "  ${use_mods[2]:+${use_mods[2]} = ${val_mods[2]}}" \
+              "  ${use_mods[3]:+${use_mods[3]} = ${val_mods[3]}}" \
+              "  ${use_mods[4]:+${use_mods[4]} = ${val_mods[4]}}" \
+              "         USE_WRF  = ${USE_WRF:-no}" \
+              "         USE_SWAN = ${USE_SWAN:-no}" \
+              "         wrfDOMS  = ${wrfDOMS:-UNDEF}" \
+              "          ocnDOMS = ${ocnDOMS:-UNDEF}" \
+              "         swanDOMS = ${swanDOMS:-UNDEF}" \
+              "        wrfNODES  = ${wrfNODES:-UNDEF}" \
+              "         ocnNODES = ${ocnNODES:-UNDEF}" \
+              "        swanNODES = ${swanNODES:-UNDEF}"
+  fi
+
+  export ocnMODELS ocnUSEMODS ocnUSEVALS
+
+  return 0
+}
+
+RunModelAs()
+{
+  local nm_func=${FUNCNAME[0]}
+  local my_prog prog_cmd
+
+  local -i modFLG=$( NumberOfActiveModels )
+  local i imod ans
+ 
+  local models use_mods val_mods
+
+  # The environment variables USE_* should be already set before calling this function.
+  checkOceanModels
+    models=( ${ocnMODELS} )
+  use_mods=( ${ocnUSEMODS} )
+  val_mods=( ${ocnUSEVALS} )
+
+  Adjust_ModelEnvVars
+
+  my_prog="${progDIR:+${progDIR}/}${progNAME}"
+  if $( checkPROG -r "${my_prog}" ); then
+    if [ -z "${COUPLED_SYSTEM:-}" ]; then
+      if [ ${modFLG} -eq 1 ]; then
+        [ -n "${USE_ROMS:+1}" ] && \
+          prog_cmd="${my_prog}${MODEL_INP:+ ${MODEL_INP}}"
+
+        [ -n "${USE_HYCOM:+1}" ] && \
+          prog_cmd="${my_prog}"
+
+        [ -n "${USE_WRF:+1}" ] && \
+          prog_cmd="${my_prog}"
+
+        [ -n "${USE_SWAN:+1}" ] && \
+          prog_cmd="${my_prog}${MODEL_INP:+ ${MODEL_INP}}"
+      else
+        prog_cmd="only one model should be in use in a no-coupled simulation:
+          COUPLED_SYSTEM  = ${COUPLED_SYSTEM:-no}"
+        for ((i = 0; i < 5; i++))
+        do
+          if [ -n "${use_mods[i]:+1}" ]; then
+            prog_cmd="${prog_cmd}
+          ${use_mods[i]} = ${val_mods[0]}"
+          fi
+        done
+        prog_cmd="${prog_cmd}
+          USE_WRF  = ${USE_WRF:-no}
+          USE_SWAN = ${USE_SWAN:-no}"
+
+        echo -n "${prog_cmd}"
+        return 1
+      fi
+    else
+      prog_cmd="${my_prog}${MODEL_INP:+ ${MODEL_INP}}"
+    fi
+  fi
+
+  echo -n "${prog_cmd}"
+}
+
+Move_Files()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_files f_inp f_out
+  local f_pfx f_sfx f_date
+  local ilst date
+  local -i icnt=0
+
+  local models use_mods val_mods
+
+  local logfile="${LOG_SCRIPT:-logfile.log}"
+  local logdir="${LOG_DIR:-}"
+
+
+  ##### Supported ocean models.
+  setOceanModels
+    models=( ${ocnMODELS} )
+  use_mods=( ${ocnUSEMODS} )
+  val_mods=( ${ocnUSEVALS} )
+
+
+  ##### Atmospheric model output files
+  Move_WRFFiles 2>/dev/null
+  if [ $? -ne 0 ]; then
+    procWarn "Failed to execute the function:" \
+             "  Function = Move_WRFFiles" 
+  fi
+
+  ##### Ocean model output files
+  for ((icnt = 0; icnt < ${#models[@]}; icnt++))
+  do
+    Move_${models[${icnt}]}Files 2>/dev/null
+    if [ $? -ne 0 ]; then
+      procWarn "Failed to execute the function:" \
+               "  Function = Move_${models[${icnt}]}Files" 
+    fi
+  done
+
+
+  ##### Waves model output files
+  Move_SWANFiles 2>/dev/null
+  if [ $? -ne 0 ]; then
+    procWarn "Failed to execute the function:" \
+             "  Function = Move_SWANFiles" 
+  fi
+
+
+  ##### Moab/Slurm or any other log files
+  my_files="*.log"
+  f_sfx=".log"
+
+  for ilst in ${my_files}
+  do
+    f_inp="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      f_date="$( stat -c "%x" "${f_inp}" | sed 's/\./ /g' | awk '{printf "%s_%s", $1, $2}' )"
+      f_out="$( basename ${f_inp} ${f_sfx} )"
+      f_out="${logdir:+${logdir}/}${f_out}${f_date:+_${f_date}}${f_sfx}"
+
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    fi
+  done
+
+  return 0
+}
+############################################################
+
+
+############################################################
+##### COUPLING RELATED FUNCTIONS
+############################################################
+checkCPLFILE()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local inp_file inp_tmpl my_swanINP
+  local atm_nodes ocn_nodes wav_nodes
+  local atm_file ocn_file wav_file
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local models use_mods val_mods
+
+  local xpr1 xpr2
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar COUPLED_SYSTEM
+
+  if [ -z "${COUPLED_SYSTEM:-}" ]; then
+   unset cplINP
+   export cplNODES=0
+   export cplFLG=0
+   return 0
+  fi
+
+  # Supported ocean models.
+  checkOceanModels
+  setOceanModels
+    models=( ${ocnMODELS} )
+  use_mods=( ${ocnUSEMODS} )
+  val_mods=( ${ocnUSEVALS} )
+
+  adjustYESNOVar USE_WRF USE_SWAN
+
+  inp_file="$( echo "${1:-UNDEF}" | sed -e 's/[[:space:]]//g' )"
+  inp_tmpl="${inp_file}-tmpl"
+
+  if ! $( checkFILE -r "${inp_tmpl}" ); then
+    procError "could not find the COUPLE input file:" \
+              "file = ${inp_tmpl}"
+  fi
+
+  # ----- is this a COUPLE input file?
+  if [ "X$( grep -Ei "^[[:space:]]*NnodesATM[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+     [ "X$( grep -Ei "^[[:space:]]*NnodesWAV[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+     [ "X$( grep -Ei "^[[:space:]]*NnodesOCN[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+     [ "X$( grep -Ei "^[[:space:]]*ATM_name[[:space:]]*="  ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+     [ "X$( grep -Ei "^[[:space:]]*WAV_name[[:space:]]*="  ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+     [ "X$( grep -Ei "^[[:space:]]*OCN_name[[:space:]]*="  ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ]; then
+    [ -f ${inp_file} ] && rm -f ${inp_file}
+    cp -f ${inp_tmpl} ${inp_file}
+    export cplINP=${inp_file}
+    export cplNODES=0
+    export cplFLG=1
+  else
+    unset cplINP
+    export cplNODES=0
+    export cplFLG=0
+    return 1
+  fi
+
+  # ATM_name
+  Get_BlockText ${inp_file} ATM_name
+  atm_file="$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')"
+  atm_file=( $(echo $(echo "${atm_file}" | sed -e 's/[=;,\{\}\\]/ /g')) )
+  atm_file="${atm_file[0]}"
+  unset bl_first bl_text bl_first_nline bl_nlines
+  # OCN_name
+  Get_BlockText ${inp_file} OCN_name
+  ocn_file="$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')"
+  ocn_file=( $(echo $(echo "${ocn_file}" | sed -e 's/[=;,\{\}\\]/ /g')) )
+  ocn_file="${ocn_file[0]}"
+  unset bl_first bl_text bl_first_nline bl_nlines
+  # WAV_name
+  Get_BlockText ${inp_file} WAV_name
+  wav_file="$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')"
+  wav_file=( $(echo $(echo "${wav_file}" | sed -e 's/[=;,\{\}\\]/ /g')) )
+  wav_file="${wav_file[@]}"
+  unset bl_first bl_text bl_first_nline bl_nlines
+
+  # Atmospheric model.
+  Check_WRFConfig "${atm_file}"
+  if [ ${wrfFLG} -gt 0 ]; then
+    xpr1="^[[:space:]]*NnodesATM[[:space:]]*=[[:space:]]*"
+    xpr2="${wrfNODES}"
+    sed -i "s/\(${xpr1}\)\(.*\)/\1${xpr2}/gi" ${inp_file}
+
+    cplNODES=$(( ${cplNODES} + ${wrfNODES} ))
+  fi
+
+  # Supported ocean models.
+  for ((icnt = 0; icnt < ${#models[@]}; icnt++))
+  do
+    check${models[${icnt}]}FILE "${ocn_file}"
+    if [ $? -ne 0 ]; then
+      procError "Failed to execute the function:" \
+                "Check Function = check${models[${icnt}]}FILE" 
+    fi
+  done
+  if [ ${ocnFLG} -gt 0 ]; then
+    xpr1="^[[:space:]]*NnodesOCN[[:space:]]*=[[:space:]]*"
+    xpr2="${ocnNODES}"
+    sed -i "s/\(${xpr1}\)\(.*\)/\1${xpr2}/gi" ${inp_file}
+
+    cplNODES=$(( ${cplNODES} + ${ocnNODES} ))
+  fi
+
+  # Wave model.
+  Check_SWANConfig "${wav_file}"
+  if [ ${swanFLG} -gt 0 ]; then
+    xpr1="^[[:space:]]*NnodesWAV[[:space:]]*=[[:space:]]*"
+    xpr2="${swanNODES}"
+    sed -i "s/\(${xpr1}\)\(.*\)/\1${xpr2}/gi" ${inp_file}
+
+    cplNODES=$(( ${cplNODES} + ${swanNODES} ))
+
+    # exit if the number of input files is less than swanDOMS
+    my_swanINP=( swanINP )
+    if [ ${#my_swanINP[@]} -lt ${swanDOMS} ]; then
+      procError "nsufficient number of SWAN input files found in file:" \
+                " COUPLE input file = ${inp_file:-UNDEF}" \
+                "SWAN input file(s) = ${swanINP:-UNDEF}" \
+                "          swanDOMS = ${swanDOMS:-UNDEF}" \
+                "number of files should be greater or equal the SWAN domains"
+    fi
+  fi
+
+  [ ${cplNODES} -le 0 ] && cplNODES=0
+  ModelCPUS=${cplNODES}
+  export ModelCPUS cplNODES
+}
+############################################################
+
+
+############################################################
+##### WRF RELATED FUNCTIONS
+############################################################
+# -------------------------------------------------------
+# Check_WRFConfig()
+# Usage:     Check_WRFConfig inp_file
+# Parameters:
+# inp_file : The name of the WRF input configuration file. This function
+#            will search for a file named "inp_file-tmpl" (inp_tmpl="inp_file-tmpl"),
+#            examine if "inp_tmpl" is a valid WRF configuration file and
+#            subsequently copy this file: inp_tmpl -> inp_file.
+#            In addition, this function alters the "inp_file" by modyfing
+#            the values of certain variables (see code below) that need to
+#            be modified just once.
+#
+# Returns : 0 (success), >0 (failure)
+#           If WRF is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Imported parameters from the environment are:
+#             USE_WRF = Denotes if WRF is active (Null/Empty value = inactive).
+#            wrfDOMS  = The number of the WRF domains (default 1).
+#              wrfDT  = The time-step size (~6*50km = 300s)
+#                       wrfDT="XXX" (one value, for the parent domain only)
+#                       (Default: 300 (seconds)).
+#             OcnSST  = To incorporate SST updates (0/1).
+#          wrfNPROC_X = The number of tiles to be constructed in the x-direction
+#                       of the domain (#of cpus in x-direction).
+#          wrfNPROC_Y = The number of tiles to be constructed in the y-direction
+#                       of the domain (#of cpus in y-direction).
+#                       Total number of CPUs = wrfNPROC_X * wrfNPROC_Y
+#                       They can be set either in the calling script or in the
+#                       WRF configuration file.
+# Exports : Exported parameters to the environment are:
+#             wrfINP wrfDOMS wrfDT OcnSST wrfNODES wrfFLG ModelCPUS
+#           wrfINP    = The name of the modified input file (inp_file)
+#           wrfDOMS   = The total number of the domains defined for WRF
+#                       (e.g., nests, default 1).
+#             wrfDT   = The time-step size.
+#             OcnSST  = 0/1.
+#           wrfNODES  = The total number of the CPUs reserved for WRF
+#           wrfFLG    = 0/1, 1 if WRF is ready for use
+#           ModelCPUS = The total number of CPUs to be used by the modeling system
+#                       (in a stand-alone WRF configuration).
+# Modifies : Variables that are modified in the WRF input configuration file are:
+#            TITLE NtileI NtileJ LcycleRST DSTART TIME_REF
+#
+# Check_WRFConfig: Checks the validity and perform certain modifications
+#                   on a WRF input configuration file.
+# -------------------------------------------------------
+Check_WRFConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local -i intval
+  local inp_file inp_tmpl nproc_x nproc_y
+  local my_wrfDOMS my_wrfDT my_NPROC_X my_NPROC_Y
+
+
+  ########## Global variables
+  unset wrfINP
+  export wrfNODES=1
+  export wrfFLG=0
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_WRF
+
+  [ -z "${USE_WRF:-}" ] && return 0
+
+  inp_file="$( echo "${1:-UNDEF}" | sed -e 's/[[:space:]]//g' )"
+  inp_tmpl="${inp_file}-tmpl"
+
+  if ! $( checkFILE -r "${inp_tmpl}" ); then
+    procError "Could not find the the WRF input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+
+  # ----- is this a WRF input file?
+  if [ "X$( grep -Ei "^[[:space:]]*\&time_control" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+     [ "X$( grep -Ei "^[[:space:]]*\&domains"      ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+     [ "X$( grep -Ei "^[[:space:]]*\&physics"      ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+     [ "X$( grep -Ei "^[[:space:]]*\&dynamics"     ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ]; then
+    [ -f ${inp_file} ] && rm -f ${inp_file}
+    cp -f ${inp_tmpl} ${inp_file}
+    export wrfFLG=1
+    export wrfINP=${inp_file}
+  else
+    procError "The supplied input file is not a valid WRF input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+
+
+  # -----
+  # Check if the user requested a number domains to be used instead of
+  # the number obtained from the input file and replace their values into
+  # the input file.
+  if [ -n "${wrfDOMS:+1}" ]; then
+    my_wrfDOMS="$(echo "${wrfDOMS}" | sed -e 's/[=;:,_\{\}\\]/ /g' | awk '{print $1}')"
+    my_wrfDOMS=$( getPosInteger "${my_wrfDOMS}" )
+    [ ${my_wrfDOMS:-0} -le 0 ] && my_wrfDOMS=1
+    ModifyNameListVar ${wrfINP} max_dom "${my_wrfDOMS:-1}"
+  fi
+
+  # Finally get the number of nests/domains being used from
+  # the input file and export the number of domains (for the case that wrfDOMS is not defined).
+  my_wrfDOMS="$( echo "$( getNameListVar ${wrfINP} max_dom )" | awk '{print $3}' )"
+  my_wrfDOMS=$( getPosInteger "${my_wrfDOMS}" )
+  if [ ${my_wrfDOMS:-0} -le 0 ]; then
+    procError "Invalid number of domains found in file:" \
+              "     File = ${wrfINP:-UNDEF}" \
+              "  wrfDOMS = ${my_wrfDOMS:-UNDEF}"
+  fi
+  export wrfDOMS=${my_wrfDOMS:-1}
+  # -----
+
+
+  # -----
+  # Check if the user requested a time step to be used
+  # and replace its value into the input file.
+  if [ -n "${wrfDT:+1}" ]; then
+    my_wrfDT="$(echo "${wrfDT}" | sed -e 's/[=;:,_\{\}\\]/ /g' | awk '{print $1}')"
+    my_wrfDT=$( getPosInteger "${my_wrfDT}" )
+    if [ ${my_wrfDT} -gt 0 ]; then
+      ModifyNameListVar ${wrfINP} time_step "${my_wrfDT}"
+    else
+      procError "Invalid time step supplied by the user:" \
+                "  wrfDT = ${wrfDT:-UNDEF}"
+    fi
+  fi
+
+  # Finally get the value of the time step being used from
+  # the input file and export the time step value.
+  my_wrfDT="$( echo "$( getNameListVar ${wrfINP} time_step )" | awk '{print $3}' )"
+  my_wrfDT=$( getPosInteger "${my_wrfDT}" )
+  if [ ${my_wrfDT:-0} -le 0 ]; then
+    procError "Invalid value for wrfDT found in file:" \
+              "   File = ${wrfINP:-UNDEF}" \
+              "  wrfDT = ${my_wrfDT:-UNDEF}"
+  fi
+  export wrfDT=${my_wrfDT}
+  # -----
+
+  # -----
+  # Check if the user requested to use ocean SST's
+  # and modify the input file accordingly.
+  intval="$(echo "${OcnSST}" | sed -e 's/[=;:,_\{\}\\]/ /g' | awk '{print $1}')"
+  intval=$( getPosInteger "${intval}" )
+  [ ${intval:-0} -le 0 ] && intval=0
+  [ ${intval:-0} -gt 0 ] && intval=1
+  ModifyNameListVar ${wrfINP} sst_update "${intval}"
+  export OcnSST=${intval}
+  # ----- 
+
+  # -----
+  # Check if the user requested a number of x/y tiles(cpus) to be used
+  # and replace their values into the input file.
+  if [ -n "${wrfNPROC_X:+1}" ]; then
+    nproc_x=( $(echo "${wrfNPROC_X}" | sed -e 's/[=;:,_\{\}\\]/ /g') )
+    intval=$(String_getInteger "${nproc_x[0]}" 0)
+    if [ ${intval} -ge -1 ] && [ ${intval} -ne 0 ]; then
+      my_NPROC_X=${intval}
+    fi
+  fi
+
+  if [ -n "${wrfNPROC_Y:+1}" ]; then
+    nproc_y=( $(echo "${wrfNPROC_Y}" | sed -e 's/[=;:,_\{\}\\]/ /g') )
+    intval=$(String_getInteger "${nproc_y[0]}" 0)
+    if [ ${intval} -gt -1 ] && [ ${intval} -ne 0 ]; then
+      my_NPROC_Y=${intval}
+    fi
+  fi
+
+  if [ -n "${my_NPROC_X:+1}" -a -n "${my_NPROC_Y:+1}" ]; then
+    ModifyNameListVar ${wrfINP} nproc_x "${my_NPROC_X}"
+    ModifyNameListVar ${wrfINP} nproc_y "${my_NPROC_Y}"
+  fi
+
+  # Finally get the number of the x/y tiles(cpus) being used from
+  # the input file and export the number of tiles(cpus).
+  nproc_x="$( echo "$( getNameListVar ${wrfINP} nproc_x )" | awk '{print $3}' )"
+  nproc_x=$(String_getInteger "${nproc_x}" 0)
+  if [ ${nproc_x} -lt -1 ] || [ ${nproc_x} -eq 0 ]; then
+    procError "Invalid value for nproc_x in file:" \
+              "     File = ${wrfINP:-UNDEF}" \
+              "  nproc_x = ${nproc_x:-UNDEF}"
+  fi
+
+  nproc_y="$( echo "$( getNameListVar ${wrfINP} nproc_y )" | awk '{print $3}' )"
+  nproc_y=$(String_getInteger "${nproc_y}" 0)
+  if [ ${nproc_y} -lt -1 ] || [ ${nproc_y} -eq 0 ]; then
+    procError "Invalid value for nproc_y in file:" \
+              "     File = ${wrfINP:-UNDEF}" \
+              "  nproc_y = ${nproc_y:-UNDEF}"
+  fi
+
+  if [ ${nproc_x} -eq -1 ] || [ ${nproc_y} -eq -1 ]; then
+    if [ ${nproc_x} -ne ${nproc_y} ]; then
+      procError "Invalid values for nproc_x, nproc_y in file:" \
+                "     File = ${wrfINP:-UNDEF}" \
+                "  nproc_x = ${nproc_x:-UNDEF}" \
+                "nproc_y = ${nproc_y:-UNDEF}"
+    fi
+  fi
+  
+  wrfNODES=$(( ${nproc_x} * ${nproc_y} ))
+  ModelCPUS=${wrfNODES}
+  export ModelCPUS wrfNODES
+  # -----
+}
+
+# -------------------------------------------------------
+# Modify_WRFConfig()
+# Usage:     Modify_WRFConfig
+# Parameters: NONE (the only feed is from the environment)
+#
+# Returns : 0 (success), >0 (failure)
+#           If WRF is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Significant imported parameters from the environment are:
+#            USE_WRF = Denotes if WRF is active (Null/Empty value = inactive).
+#            DATA_DIR = The directory where the input data are stored
+#                       (Default: current directory).
+#              wrfINP = The name of the WRF input configuration file
+#                       (Exported from Check_WRFConfig).
+#             wrfDOMS = The total number of the domains defined for WRF
+#                       (e.g., nests, refined grids, default 1).
+#               wrfDT = The time-step size (baroclinic in 3D, barotropic in 2D),
+#                       one to unlimited entries
+#                       (Default: 600 (seconds)).
+#             wrfHFRM = The time lengths to write in each history file for each nest
+#                       that is, write records every XXX seconds
+#                       wrfHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                       (Default: 86400 (seconds), 1-day).
+#            firstYR firstMO firstDA firstHR firstMN firstSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       beginning of the current simulation segment.
+#             lastYR  lastMO  lastDA  lastHR  lastMN  lastSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       end of the current simulation segment.
+# Exports : Exported parameters to the environment are:
+#             wrfLINKFILES
+#        wrfLINKFILES = The soft links to the input data created by calling
+#                       this functions.
+# Modifies : Variables that are modified in the WRF input configuration file are:
+#            startYR startMO startDA startHR startMN startSC
+#              endYR   endMO   endDA   endHR   endMN   endSC
+#            history_interval frames_per_outfile time_step 
+#            restart restart_interval usemonalb
+#
+# Modify_WRFConfig: Dynamically modifies the WRF input configuration file created
+#                   from a previous call of Check_WRFConfig.
+# -------------------------------------------------------
+Modify_WRFConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local -i ido nDOMS
+  local -i ifl nfiles
+
+  local file1 file2
+
+  local my_data_dir
+  local my_beg_date my_end_date
+  local beg_date end_date beg_jul end_jul
+  local chk_date chk_jul chk_jul1 chk_jul2
+
+  local my_FPFX my_FEXPR my_DIRS
+  local fileINI my_fileINI fileINILNK my_fileINILNK
+  local fileBRY my_fileBRY fileBRYLNK my_fileBRYLNK
+
+  local my_DT   my_domDT   my_DTval
+  local my_HIS  my_domHIS  my_HISval
+  local my_HFRM my_domHFRM my_HFRMval
+  local my_NRST my_domNRST my_NRSTval
+
+  local ixpr xpr1 xpr2 xpr3 xpr4 domstr
+
+  unset wrfLINKFILES
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_WRF
+
+
+  [ -z "${USE_WRF:-}" ] && return 0
+
+  if ! $( checkFILE -r "${wrfINP}" ); then
+    procError "Couldn't locate the WRF input file." \
+              "Need to define USE_WRF=yes" \
+              "and the name WRF input configuration file." \
+              "  USE_WRF = ${USE_WRF:-UNDEF}" \
+              "   wrfINP = ${wrfINP:-UNDEF}"
+  fi
+  
+
+  # ---------- BEG:: Initialize local variables
+  nDOMS=$(String_getInteger "${wrfDOMS:-1}" 1)
+  my_data_dir="${DATA_DIR:-.}"
+
+  # number of time-steps between writing fields into history file
+  if [ -n "${wrfHFRM:+1}" ]; then
+    my_domHFRM=( ${wrfHFRM} )
+    if [ ${nDOMS} -gt ${#my_domHFRM[@]} ]; then
+      procError "Need to specify ${nDOMS} values for wrfHFRM" \
+                "  WRF Domains = ${nDOMS}" \
+                "      wrfHFRM = ${wrfHFRM:-UNDEF}"
+    fi
+  fi
+
+  my_beg_date="${firstYR}-${firstMO}-${firstDA} ${firstHR}:${firstMN}:${firstSC}"
+  my_end_date="${lastYR}-${lastMO}-${lastDA} ${lastHR}:${lastMN}:${lastSC}"
+
+  beg_date="$( getDate --date="${my_beg_date}" --fmt='+%F_%T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"start\" date for the simulation." \
+              "  First DATE = ${my_beg_date}"
+  fi
+
+  end_date="$( getDate --date="${my_end_date}" --fmt='+%F_%T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"end\" date for the simulation." \
+              "  Last DATE = ${my_end_date}"
+  fi
+
+  beg_jul=$( getDate --date="${my_beg_date}" --fmt='+%s' )
+  end_jul=$( getDate --date="${my_end_date}" --fmt='+%s' )
+  if [ ${end_jul} -lt ${beg_jul} ]; then
+    procError "Wrong \"end\" date for the simulation: SimEnd >= SimBeg." \
+              "  First DATE = ${my_beg_date}" \
+              "   Last DATE = ${my_end_date}"
+  fi
+  # ---------- END:: Initialize local variables
+
+
+  # ---------- BEG:: Initialization/restart files
+  #
+  # We need to have "init" files for all WRF domains
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    domstr="_d$( get2DString $((ido + 1)) )"
+    my_FEXPR=
+
+    # check for initial/restart files in "my_DIRS"
+    if [ "${FORCE_INI}" -gt 0 ]; then
+      my_FPFX="wrfinput${domstr}"
+        my_FEXPR="$( getDateExpr YMDH ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+          [ $? -ne 0 ] && procError "${my_FEXPR}"
+        my_FEXPR="${wrfPFX}${my_FPFX}(.*)?${my_FEXPR}(.*)?${wrfSFX}.n(.*)?"
+      my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+      my_DIRS="${my_data_dir} ${my_data_dir}/ini"
+      fileINILNK="${my_FPFX}"
+    else
+      my_FPFX="wrfrst${domstr}"
+      my_FEXPR="atm_rst${domstr}_${beg_date}.n(.*)?"
+      my_DIRS="${OUT_DIR}"
+      fileINILNK="${my_FPFX}_${beg_date}"
+    fi
+
+    ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}"
+
+    fileINI="${foundFilePath}"
+    my_fileINI="${my_fileINI} ${fileINI}"
+    my_fileINILNK="${my_fileINILNK} ${fileINILNK}"
+  done
+
+  my_fileINI="$(strTrim "${my_fileINI}" 2)"
+  my_fileINILNK="$(strTrim "${my_fileINILNK}" 2)"
+  unset domstr ido foundFilePath
+  # ---------- END:: Initialization/restart files
+
+
+  # ---------- BEG:: Boundary conditions files
+  #
+  # We need to have "boundary" files ONLY for the parent,
+  # largest, WRF grid (domain: d01)
+  domstr="_d01"
+  my_DIRS="${my_data_dir} ${my_data_dir}/boundary"
+
+  # check for boundary files in "my_DIRS"
+  my_FPFX="wrfbdy${domstr}"
+  my_FEXPR=
+
+  for ixpr in YMDH YMD YM Y
+  do
+    xpr1="$( getDateExpr ${ixpr} ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+      [ $? -ne 0 ] && procError "${xpr1}"
+    xpr1="${wrfPFX}${my_FPFX}(.*)?${xpr1}(.*)?${wrfSFX}.n(.*)?"
+    my_FEXPR="${my_FEXPR} ${xpr1}"
+  done
+  my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+
+  ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}" "${my_end_date}"
+
+  fileBRY="${foundFilePath}"
+  fileBRYLNK="${my_FPFX}"
+  my_fileBRY="$(strTrim "${my_fileBRY} ${fileBRY}" 2)"
+  my_fileBRYLNK="$(strTrim "${my_fileBRYLNK} ${fileBRYLNK}" 2)"
+
+
+  # -----
+  # If we use sst_update=1 check for wrflowinp files (one per domain)
+  xpr1="$( echo "$( getNameListVar ${wrfINP} sst_update )" | awk '{print $3}' )"
+  xpr1="$( getPosInteger "${xpr1}" )"
+ 
+  if [ ${xpr1:-0} -gt 0 ]; then
+    for ((ido = 0; ido < ${nDOMS}; ido++))
+    do
+      domstr="_d$( get2DString $((ido + 1)) )"
+
+      # check for low boundary files in "my_DIRS"
+      my_FPFX="wrflowinp${domstr}"
+      my_FEXPR=
+
+      for ixpr in YMDH YMD YM Y
+      do
+        xpr1="$( getDateExpr ${ixpr} ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+          [ $? -ne 0 ] && procError "${xpr1}"
+        xpr1="${wrfPFX}${my_FPFX}(.*)?${xpr1}(.*)?${wrfSFX}.n(.*)?"
+        my_FEXPR="${my_FEXPR} ${xpr1}"
+      done
+      my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+
+      ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}" "${my_end_date}"
+
+      fileBRY="${foundFilePath}"
+      fileBRYLNK="${my_FPFX}"
+      my_fileBRY="$(strTrim "${my_fileBRY} ${fileBRY}" 2)"
+      my_fileBRYLNK="$(strTrim "${my_fileBRYLNK} ${fileBRYLNK}" 2)"
+    done
+  fi
+
+  unset domstr foundFilePath
+  # ---------- END:: Boundary conditions files
+
+
+  # ---------- BEG:: Prepare the wrfINP file
+  # time steps are in seconds
+  my_DTval=( ${wrfDT:-300} )
+    my_DT="${my_DT} $(echo "scale=0; ${my_DTval[0]}/1" | bc -ql 2>/dev/null)"
+
+  # generation frequency of history files (e.g, 6hours * 3600s / 60.0s = 43200 / 60 = 720)
+  # his_freq in seconds and my_HIS (below) in minutes
+  my_HISval=( ${his_freq:-86400} )
+    my_HISval="$(echo "scale=0; ${my_HISval[0]}/1" | bc -ql 2>/dev/null)"
+
+  # output restart frequency (e.g, 6hours * 3600s / 60.0s = 43200 / 60 = 720)
+  # rst_freq in seconds and my_NRST (below) in minutes
+  my_NRSTval=( ${rst_freq:-86400} )
+    my_NRST="${my_NRST} $(echo "scale=0; ${my_NRSTval[0]} / 60.0" | bc -ql 2>/dev/null)"
+ 
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    # get history output times (in seconds)
+    my_HFRMval=86400
+    [ -n "${my_domHFRM:+1}" ] && my_HFRMval="${my_domHFRM[${ido}]}"
+    
+    # history output times (in minutes)
+    my_HIS="${my_HIS} $(echo "scale=0; ${my_HFRMval} / 60.0" | bc -ql 2>/dev/null)"
+
+    # history field frames per history file
+    my_HFRM="${my_HFRM} $(echo "scale=0; ${my_HISval} / ${my_HFRMval}" | bc -ql 2>/dev/null)"
+  done
+
+  # ---------- SIMULATION LENGTH
+
+  # ---------- START DATE
+  # start_year
+    ModifyNameListVar ${wrfINP} start_year   "${firstYR}" ${nDOMS}
+  # start_month
+    ModifyNameListVar ${wrfINP} start_month  "${firstMO}" ${nDOMS}
+  # start_day
+    ModifyNameListVar ${wrfINP} start_day    "${firstDA}" ${nDOMS}
+  # start_hour
+    ModifyNameListVar ${wrfINP} start_hour   "${firstHR}" ${nDOMS}
+  # start_minute
+    ModifyNameListVar ${wrfINP} start_minute "${firstMN}" ${nDOMS}
+  # start_second
+    ModifyNameListVar ${wrfINP} start_second "${firstSC}" ${nDOMS}
+
+  # ---------- END DATE
+  # end_year
+    ModifyNameListVar ${wrfINP} end_year   "${lastYR}" ${nDOMS}
+  # end_month
+    ModifyNameListVar ${wrfINP} end_month  "${lastMO}" ${nDOMS}
+  # end_day
+    ModifyNameListVar ${wrfINP} end_day    "${lastDA}" ${nDOMS}
+  # end_hour
+    ModifyNameListVar ${wrfINP} end_hour   "${lastHR}" ${nDOMS}
+  # end_minute
+    ModifyNameListVar ${wrfINP} end_minute "${lastMN}" ${nDOMS}
+  # end_second
+    ModifyNameListVar ${wrfINP} end_second "${lastSC}" ${nDOMS}
+
+  # ---------- HISTORY FIELDS
+  # history_interval
+    ModifyNameListVar ${wrfINP} history_interval "${my_HIS}"
+  # frames_per_outfile
+    ModifyNameListVar ${wrfINP} frames_per_outfile "${my_HFRM}"
+
+  # ---------- RESTART PARAMETERS
+  # restart flag
+    if [ ${FORCE_INI} -gt 0 ]; then
+      ModifyNameListVar ${wrfINP} restart ".false."
+    else
+      ModifyNameListVar ${wrfINP} restart ".true."
+    fi
+  # restart_interval
+    ModifyNameListVar ${wrfINP} restart_interval "${my_NRST}"
+
+  # ---------- TIME STEPS
+  # time_step
+    ModifyNameListVar ${wrfINP} time_step "${my_DT}"
+
+  # ---------- ALBEDO
+  # make sure we are using monthly albedo values (instead of one table value)
+    ModifyNameListVar ${wrfINP} usemonalb  ".true."
+  # ---------- END:: Prepare the wrfINP file
+
+
+  # ---------- BEG:: Make the links to the data/input files
+  if [ -n "${my_fileINI:+1}" ]; then
+    file1=( ${my_fileINI} )
+    file2=( ${my_fileINILNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileBRY:+1}" ]; then
+    file1=( ${my_fileBRY} )
+    file2=( ${my_fileBRYLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+  # ---------- END:: Make the links to the data/input files
+
+  wrfLINKFILES="${my_fileINILNK} ${my_fileBRYLNK}"
+  export wrfLINKFILES
+}
+
+Move_WRFFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_files f_inp f_out
+  local f_pfx f_sfx
+  local ilst
+
+  local logfile="${LOG_SCRIPT:-logfile.log}"
+  local outdir="${OUT_DIR:-}"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_WRF
+
+  [ -z "${USE_WRF:-}" ] && return 0
+
+  $( ! checkDIR -rx "${outdir}" ) && outdir=
+
+
+  ### Remove any links created during the simulation.
+  if [ -n "${wrfLINKFILES:+1}" ]; then
+    my_files="${wrfLINKFILES}"
+    for ilst in ${my_files}
+    do
+      if $( checkFILE -rL "${ilst}" ); then
+        echo "       Removing:  ${ilst}" >> ${logfile}
+        rm -f ${ilst}
+      fi
+    done
+  fi
+
+
+  ### Rename and move all output files created during the simulation.
+  my_files="namelist*.output* wrfout_* rsl*"
+
+  for ilst in ${my_files}
+  do
+    f_inp="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      if [ -n "$( isNcdf "${f_inp}" )" ]; then
+        f_sfx=".nc"
+      else
+        f_sfx=".dat"
+      fi
+
+      f_out="${f_inp%*${f_sfx}}"
+      f_out="$( echo ${f_out} | sed 's/wrfout/his/g' )"
+      f_out="${outdir:+${outdir}/}atm_${f_out}${f_sfx}"
+
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    fi
+  done
+
+
+  ### Rename and move all restart files created during the simulation.
+  my_files="wrfrst_*"
+
+  for ilst in ${my_files}
+  do
+    f_inp="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      if [ -n "$( isNcdf "${f_inp}" )" ]; then
+        f_sfx=".nc"
+      else
+        f_sfx=".dat"
+      fi
+
+      f_out="${f_inp%*${f_sfx}}"
+      f_out="$( echo ${f_out} | sed 's/wrfrst/rst/g' )"
+      f_out="${outdir:+${outdir}/}atm_${f_out}${f_sfx}"
+
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    fi
+  done
+
+  return 0
+}
+############################################################
+
+
+############################################################
+##### ROMS RELATED FUNCTIONS
+############################################################
+roms_TopoFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local -i ido nDOMS ntimes
+  local -i intv1 intv2
+  local -i ifl nfiles
+
+  local file1 file2 ifile idir
+  local rdays
+
+  local my_USE_FRC
+
+  local my_data_dir
+  local my_beg_date my_end_date
+  local beg_date end_date beg_jul end_jul
+  local chk_date chk_jul chk_jul1 chk_jul2
+
+  local my_FPFX my_FSFX my_FEXPR my_DIRS
+  local fileGRD my_fileGRD fileGRDLNK my_fileGRDLNK
+  local fileINI my_fileINI fileINILNK my_fileINILNK
+  local fileBRY my_fileBRY fileBRYLNK my_fileBRYLNK
+  local fileCLI my_fileCLI fileCLILNK my_fileCLILNK
+
+  local my_NFFILES my_FRC_DIR
+  local fileFRC my_fileFRC fileFRCLNK my_fileFRCLNK
+
+  local fileOUT my_fileOUT fileOUTLNK my_fileOUTLNK
+
+  local my_Lm my_Mm my_N
+  local my_Vtransform my_Vstretching my_theta_s my_theta_b my_Tcline
+
+
+  local opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+
+  [ -n "${ocnGRDLINKS:+1}" ] && rm -f ${ocnGRDLINKS}
+  unset ocnGRDLINKS
+
+  inp_dirs="$( getDirList bath )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Check bathymetry/topography files and make the links.
+  # Check for bathymetry/topography files in all "inp_dirs" and make
+  # the links in the current directory.
+  
+  # ---------- BEG:: Initialize local variables
+  nDOMS=$(String_getInteger "${ocnDOMS:-1}" 1)
+  my_data_dir="${DATA_DIR:-.}"
+
+  if [ -n "${ocnDT:+1}" ]; then
+    my_domDT=( ${ocnDT} )
+    if [ ${nDOMS} -gt ${#my_domDT[@]} ]; then
+      procError "Need to specify ${nDOMS} values for ocnDT." \
+                "  ROMS Domains = ${nDOMS}" \
+                "         ocnDT = ${ocnDT:-UNDEF}"
+    fi
+  fi
+
+  # ---------- BEG:: Bathymetry files
+  # We need to have bathymetry files for all ROMS domains
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    domstr="_d$( get2DString $((ido + 1)) )"
+    my_FEXPR=
+
+    # check for bathymetry files in "my_DIRS"
+    my_FPFX="romsgrd${domstr}"
+    my_FEXPR="${ocnPFX}${my_FPFX}${ocnSFX}.n(.*)?"
+    my_DIRS="${my_data_dir} ${my_data_dir}/bath"
+    fileGRDLNK="ocn_grd${domstr}.nc"
+
+    ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}"
+
+    fileGRD="${foundFilePath}"
+    my_fileGRD="${my_fileGRD} ${fileGRD}"
+    my_fileGRDLNK="${my_fileGRDLNK} ${fileGRDLNK}"
+  done
+
+  my_fileGRD="$(strTrim "${my_fileGRD}" 2)"
+  my_fileGRDLNK="$(strTrim "${my_fileGRDLNK}" 2)"
+  unset domstr ido foundFilePath
+  # ---------- END:: Bathymetry files
+
+
+  # ---------- BEG:: Make the links to the data/input files
+  if [ -n "${my_fileGRD:+1}" ]; then
+    file1=( ${my_fileGRD} )
+    file2=( ${my_fileGRDLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileINI:+1}" ]; then
+    file1=( ${my_fileINI} )
+    file2=( ${my_fileINILNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileBRY:+1}" ]; then
+    file1=( ${my_fileBRY} )
+    file2=( ${my_fileBRYLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileCLI:+1}" ]; then
+    file1=( ${my_fileCLI} )
+    file2=( ${my_fileCLILNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_USE_FRC:+1}" ]; then
+    file1=( ${my_fileFRC} )
+    file2=( ${my_fileFRCLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+  # ---------- END:: Make the links to the data/input files
+
+  ocnLINKFILES="${my_fileGRDLNK} ${my_fileINILNK} ${my_fileBRYLNK} ${my_fileCLILNK} ${my_fileFRCLNK}"
+  export ocnLINKFILES
+}
+
+
+
+
+
+# -------------------------------------------------------
+# Check_ROMSConfig()
+# Usage:     Check_ROMSConfig inp_file
+# Parameters:
+# inp_file : The name of the ROMS input configuration file. This function
+#            will search for a file named "inp_file-tmpl" (inp_tmpl="inp_file-tmpl"),
+#            examine if "inp_tmpl" is a valid ROMS configuration file and
+#            subsequently copy this file: inp_tmpl -> inp_file.
+#            In addition, this function alters the "inp_file" by modyfing
+#            the values of certain variables (see code below) that need to
+#            be modified just once.
+#
+# Returns : 0 (success), >0 (failure)
+#           If ROMS is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Imported parameters from the environment are:
+#            USE_ROMS = Denotes if ROMS is active (Null/Empty value = inactive).
+#           REF_DATE  = The reference date from which all relative
+#                       times are calculated (see functions_common).
+#           SimTitle  = The title to be given to the simulation
+#                       (Default: GoM Simulation).
+#             SimBeg  = The begin date of the simulation.
+#            ocnDOMS  = The number of the ROMS domains (default 1).
+#          ocnNPROC_X = The number of tiles to be constructed in the x-direction
+#                       of the domain (#of cpus in x-direction).
+#          ocnNPROC_Y = The number of tiles to be constructed in the y-direction
+#                       of the domain (#of cpus in y-direction).
+#                       Total number of CPUs = ocnNPROC_X * ocnNPROC_Y
+#                       They can be set either in the calling script or in the
+#                       ROMS configuration file.
+# Exports : Exported parameters to the environment are:
+#             ocnINP ocnDOMS ocnNODES ocnFLG ModelCPUS
+#           ocnINP    = The name of the modified input file (inp_file)
+#           ocnDOMS   = The total number of the domains defined for ROMS
+#                       (e.g., nests, refined grids, default 1)
+#           ocnNODES  = The total number of the CPUs reserved for ROMS
+#           ocnFLG    = 0/1, 1 if ROMS is ready for use
+#           ModelCPUS = The total number of CPUs to be used by the modeling system
+#                       (in a stand-alone ROMS configuration).
+# Modifies : Variables that are modified in the ROMS input configuration file are:
+#            TITLE Ngrids NtileI NtileJ LcycleRST DSTART TIME_REF
+#
+# Check_ROMSConfig: Checks the validity and perform certain modifications
+#                   on a ROMS input configuration file.
+# -------------------------------------------------------
+Check_ROMSConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local -i n1 n2 idx intval count
+  local inp_file inp_tmpl nproc_x nproc_y
+
+  local my_TITLE my_DSTART
+  local my_ocnDOMS
+  local my_NPROC_X my_NPROC_Y
+
+  local my_refJUL my_refTIME my_simJUL
+
+  local xpr1 xpr2
+
+
+  ########## Global variables
+  unset ocnINP
+  export ocnNODES=1
+  export ocnFLG=0
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_ROMS
+
+  [ -z "${USE_ROMS:-}" ] && return 0
+
+  inp_file="$( echo "${1:-UNDEF}" | sed -e 's/[[:space:]]//g' )"
+  inp_tmpl="${inp_file}-tmpl"
+
+  if ! $( checkFILE -r "${inp_tmpl}" ); then
+    procError "Could not find the ROMS input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+
+  # ----- is this a ROMS input file?
+  if [ "X$( grep -Ei "^[[:space:]]*NtileI[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+     [ "X$( grep -Ei "^[[:space:]]*NtileJ[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+     [ "X$( grep -Ei "^[[:space:]]*NTIMES[[:space:]]*=" ${inp_tmpl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ]; then
+    [ -f ${inp_file} ] && rm -f ${inp_file}
+    cp -f ${inp_tmpl} ${inp_file}
+    export ocnFLG=1
+    export ocnINP="${inp_file}"
+  else
+    procError "The supplied input file is not a valid ROMS input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+
+
+  # -----
+  my_TITLE=${SimTitle:-"GoM Simulation"}
+
+
+  # Reference date to be used below.
+  getInpTimeStamp "${REF_DATE:-UNDEF}"
+    my_refJUL=${myJUL}
+      my_refTIME="scale=8; ( ${myHR} * 3600.0 + ${myMN} * 60.0 ) / 86400.0"
+    my_refTIME="$(echo "${my_refTIME}" | bc -ql 2>/dev/null)"
+      my_refTIME="scale=8; ${myYRStr}${myMOStr}${myDAStr} + ${my_refTIME}"
+    my_refTIME="$(echo "${my_refTIME}" | bc -ql 2>/dev/null)"
+    my_refTIME="$(echo "${my_refTIME}" | awk '{ printf "%.*f\n", 2, $0 }')d0"
+  unset myYR myMO myDA myHR myMN mySC myJUL
+  unset myYRStr myMOStr myDAStr myHRStr myMNStr mySCStr myDATE
+
+  # Days from reference date to start of simulation
+  getInpTimeStamp "${SimBeg:-UNDEF}"
+    my_simJUL=${myJUL}
+      my_DSTART="scale=8; ( ${my_simJUL} - ${my_refJUL} ) / 86400.0"
+    my_DSTART="$(echo "${my_DSTART}" | bc -ql 2>/dev/null)"
+    my_DSTART="$(echo "${my_DSTART}" | awk '{ printf "%.*f\n", 2, $0 }')d0"
+  unset myYR myMO myDA myHR myMN mySC myJUL
+  unset myYRStr myMOStr myDAStr myHRStr myMNStr mySCStr myDATE
+
+  # Modify/update these fields in the ROMS input file
+  # TITLE
+    sed -i "s/\(^[[:space:]]*\)TITLE[[:space:]]*=.*/\1TITLE = ${my_TITLE}/g" ${ocnINP}
+  # LcycleRST
+    xpr1="$( Make_BlockText ${ocnINP} "LcycleRST" "F" 4 2 )"
+    Put_BlockText ${ocnINP} "LcycleRST" "${xpr1}"
+  # DSTART
+    xpr1="$( Make_BlockText ${ocnINP} "DSTART" "${my_DSTART}" 4 1 )"
+    Put_BlockText ${ocnINP} "DSTART" "${xpr1}"
+  # TIME_REF
+    xpr1="$( Make_BlockText ${ocnINP} "TIME_REF" "${my_refTIME}" 4 1 )"
+    Put_BlockText ${ocnINP} "TIME_REF" "${xpr1}"
+  # -----
+
+
+  # -----
+  # Check if the user requested a number domains to be used instead of
+  # the number obtained from the input file and replace their values into
+  # the input file.
+  if [ -n "${ocnDOMS:+1}" ]; then
+    my_ocnDOMS="$(echo "${ocnDOMS}" | sed -e 's/[=;:,_\{\}\\]/ /g' | awk '{print $1}')"
+    my_ocnDOMS=$( getPosInteger "${my_ocnDOMS:-1}" )
+    [ ${my_ocnDOMS:-0} -le 0 ] && my_ocnDOMS=1
+    xpr1="$( Make_BlockText ${ocnINP} "Ngrids" "${my_ocnDOMS}" 1 1 )"
+    Put_BlockText ${ocnINP} "Ngrids" "${xpr1}"
+  fi
+
+  # Get the number of nests/domains being used from
+  # the input file and export the number of domains.
+  Get_BlockText ${ocnINP} Ngrids
+  my_ocnDOMS="$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')"
+  my_ocnDOMS=( $(echo $(echo "${my_ocnDOMS}" | sed -e 's/[=;:,_\{\}\\]/ /g')) )
+  my_ocnDOMS=$( getPosInteger "${my_ocnDOMS[0]}" )
+  unset bl_first bl_text bl_first_nline bl_nlines
+  if [ ${my_ocnDOMS:-0} -le 0 ]; then
+    procError "Invalid number of domains found in file:" \
+              "     File = ${ocnINP:-UNDEF}" \
+              "  ocnDOMS = ${my_ocnDOMS:-UNDEF}"
+  fi
+  export ocnDOMS=${my_ocnDOMS:-1}
+  # -----
+
+
+  # -----
+  # Check if the user requested a number of x/y tiles(cpus) to be used
+  # and replace their values into the input file.
+  if [ -n "${ocnNPROC_X:+1}" ]; then
+    nproc_x=( $(echo "${ocnNPROC_X}" | sed -e 's/[=;:,_\{\}\\]/ /g') )
+    count=0
+    n1=0
+    n2=${#nproc_x[@]}
+    for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+    do
+      intval=$(String_getInteger "${nproc_x[${icnt}]}" 0)
+      if [ ${intval} -gt 0 ]; then
+        my_NPROC_X[${count}]=${intval}
+        count=$(( ${count} + 1))
+      fi
+    done
+
+    if [ -z "${my_NPROC_X:-}" ]; then
+      procError "User supplied invalid values for ocnNPROC_X" \
+                "  ocnNPROC_X = ${ocnNPROC_X:-UNDEF}"
+    else
+      if [ ${#my_NPROC_X[@]} -lt ${ocnDOMS} ]; then
+        n1=${#my_NPROC_X[@]}
+        n2=${ocnDOMS}
+        idx=$(( ${n1} - 1))
+        for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+        do
+          my_NPROC_X[${icnt}]=${my_NPROC_X[${idx}]}
+        done
+      fi
+      my_NPROC_X="${my_NPROC_X[@]}"
+    fi
+  fi
+
+  if [ -n "${ocnNPROC_Y:+1}" ]; then
+    nproc_y=( $(echo "${ocnNPROC_Y}" | sed -e 's/[=;:,_\{\}\\]/ /g') )
+    count=0
+    n1=0
+    n2=${#nproc_y[@]}
+    for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+    do
+      intval=$(String_getInteger "${nproc_y[${icnt}]}" 0)
+      if [ ${intval} -gt 0 ]; then
+        my_NPROC_Y[${count}]=${intval}
+        count=$(( ${count} + 1))
+      fi
+    done
+
+    if [ -z "${my_NPROC_Y:-}" ]; then
+      procError "User supplied invalid values for ocnNPROC_Y" \
+                "  ocnNPROC_Y = ${ocnNPROC_Y:-UNDEF}"
+    else
+      if [ ${#my_NPROC_Y[@]} -lt ${ocnDOMS} ]; then
+        n1=${#my_NPROC_Y[@]}
+        n2=${ocnDOMS}
+        idx=$(( ${n1} - 1))
+        for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+        do
+          my_NPROC_Y[${icnt}]=${my_NPROC_Y[${idx}]}
+        done
+      fi
+      my_NPROC_Y="${my_NPROC_Y[@]}"
+    fi
+  fi
+
+  if [ -n "${my_NPROC_X:+1}" -a -n "${my_NPROC_Y:+1}" ]; then
+    if [ ${#my_NPROC_X[@]} -eq ${#my_NPROC_Y[@]} ]; then
+      xpr1="$( Make_BlockText ${ocnINP} "NtileI" "${my_NPROC_X}" 4 2 )"
+      Put_BlockText ${ocnINP} "NtileI" "${xpr1}"
+      xpr1="$( Make_BlockText ${ocnINP} "NtileJ" "${my_NPROC_Y}" 4 2 )"
+      Put_BlockText ${ocnINP} "NtileJ" "${xpr1}"
+    fi
+  fi
+
+  # Finally get the number of the x/y tiles(cpus) being used from
+  # the input file and export the number of tiles(cpus).
+  Get_BlockText ${ocnINP} NtileI
+  nproc_x="$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')"
+  nproc_x=( $(echo $(echo "${nproc_x}" | sed -e 's/[=;:,_\{\}\\]/ /g')) )
+  unset bl_first bl_text bl_first_nline bl_nlines
+  if [ -z "${nproc_x:-}" ]; then
+    procError "Wrong values for NtileI found in the file:" \
+              "    File = ${ocnINP}" \
+              "  NtileI = ${nproc_x:-UNDEF}"
+  else
+    if [ ${#nproc_x[@]} -lt ${ocnDOMS} ]; then
+      n1=${#nproc_x[@]}
+      n2=${ocnDOMS}
+      idx=$(( ${n1} - 1))
+      for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+      do
+        nproc_x[${icnt}]=${nproc_x[${idx}]}
+      done
+    fi
+  fi
+
+  Get_BlockText ${ocnINP} NtileJ
+  nproc_y=$(echo "${bl_text}" | sed -e 's/\!.*//g' | sed -e 's/.*=//g')
+  nproc_y=( $(echo $(echo ${nproc_y} | sed -e 's/[=;:,_\{\}\\]/ /g')) )
+  unset bl_first bl_text bl_first_nline bl_nlines
+  if [ -z "${nproc_y:-}" ]; then
+    procError "Wrong values for NtileJ found in the file:" \
+              "    File = ${ocnINP}" \
+              "  NtileJ = ${nproc_y:-UNDEF}"
+  else
+    if [ ${#nproc_y[@]} -lt ${ocnDOMS} ]; then
+      n1=${#nproc_y[@]}
+      n2=${ocnDOMS}
+      idx=$(( ${n1} - 1))
+      for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+      do
+        nproc_y[${icnt}]=${nproc_y[${idx}]}
+      done
+    fi
+  fi
+
+  ocnNODES=0
+  n1=0
+  n2=${#nproc_x[@]}
+  [ ${n2} -ge ${ocnDOMS} ] && n2=${ocnDOMS}
+  for ((icnt = ${n1}; icnt < ${n2}; icnt++))
+  do
+    ocnNODES=$(( ${ocnNODES} + ${nproc_x[${icnt}]} * ${nproc_y[${icnt}]} ))
+  done
+  [ ${ocnNODES} -le 0 ] && ocnNODES=1
+  export ocnNODES
+  # -----
+
+  ModelCPUS=${ocnNODES}
+  export ModelCPUS
+
+  return 0
+}
+
+# -------------------------------------------------------
+# Modify_ROMSConfig()
+# Usage:     Modify_ROMSConfig
+# Parameters: NONE (the only feed is from the environment)
+#
+# Returns : 0 (success), >0 (failure)
+#           If ROMS is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Significant imported parameters from the environment are:
+#            USE_ROMS = Denotes if ROMS is active (Null/Empty value = inactive).
+#             USE_FRC = Denotes if ROMS is using extra forcing files
+#                       (Null/Empty value = inactive).
+#            DATA_DIR = The directory where the input data are stored
+#                       (Default: current directory).
+#              ocnINP = The name of the ROMS input configuration file
+#                       (Exported from Check_ROMSConfig).
+#             ocnDOMS = The total number of the domains defined for ROMS
+#                       (e.g., nests, refined grids, default 1).
+#               ocnDT = The time-step size (baroclinic in 3D, barotropic in 2D),
+#                       one to unlimited entries
+#                       (Default: 600 (seconds)).
+#          ocnNDTFAST = The number of barotropic time-steps to reach "ocnDT",
+#                       one to unlimited entries
+#                       (Default: 30 (dimensionless)).
+#             ocnHFRM = The time lengths to write in each history file for each nest
+#                       that is, write records every XXX seconds
+#                       ocnHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                       (Default: 86400 (seconds), 1-day).
+#            firstYR firstMO firstDA firstHR firstMN firstSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       beginning of the current simulation segment.
+#             lastYR  lastMO  lastDA  lastHR  lastMN  lastSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       end of the current simulation segment.
+# Exports : Exported parameters to the environment are:
+#             ocnLINKFILES
+#        ocnLINKFILES = The soft links to the input data created by calling
+#                       this functions.
+# Modifies : Variables that are modified in the ROMS input configuration file are:
+#            NTIMES DT NDTFAST
+#            NRREC NRST NDEFHIS NHIS
+#            NDEFAVG NAVG NDEFDIA NDIA
+#            NDEFTLM NTLM NDEFADJ NADJ
+#            GRDNAME ININAME BRYNAME CLMNAME
+#            NFFILES FRCNAME
+#            GSTNAME RSTNAME HISNAME TLMNAME TLFNAME
+#            ADJNAME AVGNAME DIANAME STANAME FLTNAME
+#
+# Modify_ROMSConfig: Dynamically modifies the ROMS input configuration file created
+#                    from a previous call of Check_ROMSConfig.
+# -------------------------------------------------------
+Modify_ROMSConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local -i ido nDOMS ntimes
+  local -i intv1 intv2
+  local -i ifl nfiles
+
+  local file1 file2 ifile idir
+  local rdays
+
+  local my_USE_FRC
+
+  local my_data_dir
+  local my_beg_date my_end_date
+  local beg_date end_date beg_jul end_jul
+  local chk_date chk_jul chk_jul1 chk_jul2
+
+  local my_FPFX my_FSFX my_FEXPR my_DIRS
+  local fileGRD my_fileGRD fileGRDLNK my_fileGRDLNK
+  local fileINI my_fileINI fileINILNK my_fileINILNK
+  local fileBRY my_fileBRY fileBRYLNK my_fileBRYLNK
+  local fileCLI my_fileCLI fileCLILNK my_fileCLILNK
+
+  local my_NFFILES my_FRC_DIR
+  local fileFRC my_fileFRC fileFRCLNK my_fileFRCLNK
+
+  local fileOUT my_fileOUT fileOUTLNK my_fileOUTLNK
+
+  local my_Lm my_Mm my_N
+  local my_Vtransform my_Vstretching my_theta_s my_theta_b my_Tcline
+
+  local my_NTIMES my_NTIMESval
+  local my_domDT my_domNDTFAST my_domHFRM
+  local my_DT my_DTval my_NDTFAST my_NDTFASTval
+  local my_NDEFHIS my_NHIS my_HISval my_HFRMval
+  local my_NRST my_NRSTval my_NRREC my_NRRECval
+
+  local ixpr xpr1 xpr2 xpr3 xpr4 domstr
+
+  unset ocnLINKFILES
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_ROMS USE_FRC
+  
+
+  [ -z "${USE_ROMS:-}" ] && return 0
+
+  if ! $( checkFILE -r "${ocnINP}" ); then
+    procError "Couldn't locate the ROMS input file." \
+              "Need to define USE_ROMS=yes" \
+              "and the name ROMS input configuration file." \
+              "  USE_ROMS = ${USE_ROMS:-UNDEF}" \
+              "   ocnINP  = ${ocnINP:-UNDEF}"
+  fi
+
+
+  # ---------- BEG:: Initialize local variables
+  nDOMS=$(String_getInteger "${ocnDOMS:-1}" 1)
+  my_data_dir="${DATA_DIR:-.}"
+
+  if [ -n "${ocnDT:+1}" ]; then
+    my_domDT=( ${ocnDT} )
+    if [ ${nDOMS} -gt ${#my_domDT[@]} ]; then
+      procError "Need to specify ${nDOMS} values for ocnDT." \
+                "  ROMS Domains = ${nDOMS}" \
+                "         ocnDT = ${ocnDT:-UNDEF}"
+    fi
+  fi
+
+  if [ -n "${ocnNDTFAST:+1}" ]; then
+    my_domNDTFAST=( ${ocnNDTFAST} )
+    if [ ${nDOMS} -gt ${#my_domNDTFAST[@]} ]; then
+      procError "Need to specify ${nDOMS} values for ocnNDTFAST." \
+                "  ROMS Domains = ${nDOMS}" \
+                "    ocnNDTFAST = ${ocnNDTFAST:-UNDEF}"
+    fi
+  fi
+
+  # number of time-steps between writing fields into history file
+  if [ -n "${ocnHFRM:+1}" ]; then
+    my_domHFRM=( ${ocnHFRM} )
+    if [ ${nDOMS} -gt ${#my_domHFRM[@]} ]; then
+      procError "Need to specify ${nDOMS} values for ocnHFRM." \
+                "  ROMS Domains = ${nDOMS}" \
+                "       ocnHFRM = ${ocnHFRM:-UNDEF}"
+    fi
+  fi
+
+  my_beg_date="${firstYR}-${firstMO}-${firstDA} ${firstHR}:${firstMN}:${firstSC}"
+  my_end_date="${lastYR}-${lastMO}-${lastDA} ${lastHR}:${lastMN}:${lastSC}"
+
+  beg_date="$( getDate --date="${my_beg_date}" --fmt='+%F_%T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"start\" date for the simulation." \
+              "  First Date = ${my_beg_date}"
+  fi
+
+  end_date="$( getDate --date="${my_end_date}" --fmt='+%F_%T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"end\" date for the simulation." \
+              "  Last Date = ${my_end_date}"
+  fi
+
+  beg_jul=$( getDate --date="${my_beg_date}" --fmt='+%s' )
+  end_jul=$( getDate --date="${my_end_date}" --fmt='+%s' )
+  if [ ${end_jul} -lt ${beg_jul} ]; then
+    procError "Wrong \"end\" date for the simulation: SimEnd >= SimBeg." \
+              "  First Date = ${my_beg_date}" \
+              "   Last Date = ${my_end_date}"
+  fi
+
+  # Determine the length (in days) of the current simulation
+  rdays="$(echo "scale=5; ( ${end_jul} - ${beg_jul} ) / 86400.0" | bc -ql 2>/dev/null)"
+  # ---------- END:: Initialize local variables
+
+
+  # ---------- BEG:: Bathymetry files
+  # We need to have bathymetry files for all ROMS domains
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    domstr="_d$( get2DString $((ido + 1)) )"
+    my_FEXPR=
+
+    # check for bathymetry files in "my_DIRS"
+    my_FPFX="romsgrd${domstr}"
+    my_FEXPR="${ocnPFX}${my_FPFX}${ocnSFX}.n(.*)?"
+    my_DIRS="${my_data_dir} ${my_data_dir}/bath"
+    fileGRDLNK="ocn_grd${domstr}.nc"
+
+    ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}"
+
+    fileGRD="${foundFilePath}"
+    my_fileGRD="${my_fileGRD} ${fileGRD}"
+    my_fileGRDLNK="${my_fileGRDLNK} ${fileGRDLNK}"
+  done
+
+  my_fileGRD="$(strTrim "${my_fileGRD}" 2)"
+  my_fileGRDLNK="$(strTrim "${my_fileGRDLNK}" 2)"
+  unset domstr ido foundFilePath
+  # ---------- END:: Bathymetry files
+
+
+  # ---------- BEG:: Initialization/restart files
+  #
+  # We need to have "init" files for all ROMS domains
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    domstr="_d$( get2DString $((ido + 1)) )"
+    my_FEXPR=
+
+    # check for initial/restart files in "my_DIRS"
+    if [ ${FORCE_INI} -gt 0 ]; then
+      my_FPFX="romsinit${domstr}"
+        my_FEXPR="$( getDateExpr YMDH ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+          [ $? -ne 0 ] && procError "${my_FEXPR}"
+        my_FEXPR="${ocnPFX}${my_FPFX}(.*)?${my_FEXPR}(.*)?${ocnSFX}.n(.*)?"
+      my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+      my_DIRS="${my_data_dir} ${my_data_dir}/ini"
+      fileINILNK="ocn_init${domstr}.nc"
+    else
+      my_FPFX="ocn_rst${domstr}"
+      my_FEXPR="${my_FPFX}_${beg_date}.n(.*)?"
+      my_DIRS="${OUT_DIR}"
+      fileINILNK="ocn_init${domstr}.nc"
+    fi
+
+    ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}"
+
+    fileINI="${foundFilePath}"
+    my_fileINI="${my_fileINI} ${fileINI}"
+    my_fileINILNK="${my_fileINILNK} ${fileINILNK}"
+
+    # get the NTIMES variable from the NetCDF ini file(s) (will be used below)
+    ntimes[${ido}]=0
+    if [ ${FORCE_INI} -le 0 ]; then
+      ncdf_getVar ${fileINI} "ntimes"
+      xpr1="$( echo "${ncdfVarVal}" | awk '{print $1}' )"
+      ntimes[${ido}]=$(String_getInteger "${xpr1}" -1)
+      unset ncdfVarVal
+
+      if [ ${ntimes[${ido}]} -le 0 ]; then
+        procError "Problem with NTIMES variable in:" \
+                  "  INI_FILE = ${fileINI}"
+      fi
+    fi
+
+    # create the output file names
+    my_fileOUT="${my_fileOUT} ocn_out${domstr}.nc"
+  done
+
+  my_fileINI="$(strTrim "${my_fileINI}" 2)"
+  my_fileINILNK="$(strTrim "${my_fileINILNK}" 2)"
+  my_fileOUT="$(strTrim "${my_fileOUT}" 2)"
+  unset domstr ido foundFilePath
+  # ---------- END:: Initialization/restart files
+
+
+  # ---------- BEG:: Boundary conditions files
+  #
+  # We need to have "boundary" and "climatology" files ONLY for the parent,
+  # largest, ROMS grid (domain: d01)
+  domstr="_d01"
+  my_DIRS="${my_data_dir} ${my_data_dir}/boundary"
+
+  # (A) check for boundary files in "my_DIRS"
+  my_FPFX="romsbry${domstr}"
+  my_FEXPR=
+
+  for ixpr in YMDH YMD YM Y
+  do
+    xpr1="$( getDateExpr ${ixpr} ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+      [ $? -ne 0 ] && procError "${xpr1}"
+    xpr1="${ocnPFX}${my_FPFX}(.*)?${xpr1}(.*)?${ocnSFX}.n(.*)?"
+    my_FEXPR="${my_FEXPR} ${xpr1}"
+  done
+  my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+
+  ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}" "${my_end_date}"
+
+  fileBRY="${foundFilePath}"
+  fileBRYLNK="ocn_bry${domstr}.nc"
+  my_fileBRY="$(strTrim "${my_fileBRY} ${fileBRY}" 2)"
+  my_fileBRYLNK="$(strTrim "${my_fileBRYLNK} ${fileBRYLNK}" 2)"
+
+  # (B) check for climatology files in "my_DIRS"
+  my_FPFX="romsclim${domstr}"
+  my_FEXPR=
+
+  for ixpr in YMDH YMD YM Y
+  do
+    xpr1="$( getDateExpr ${ixpr} ${firstYR} ${firstMO} ${firstDA} ${firstHR} )"
+      [ $? -ne 0 ] && procError "${xpr1}"
+    xpr1="${ocnPFX}${my_FPFX}(.*)?${xpr1}(.*)?${ocnSFX}.n(.*)?"
+    my_FEXPR="${my_FEXPR} ${xpr1}"
+  done
+  my_FEXPR="${my_FEXPR} ${my_FPFX}.n(.*)?"
+
+  ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}" "${my_end_date}"
+
+  fileCLI="${foundFilePath}"
+  fileCLILNK="ocn_clim${domstr}.nc"
+  my_fileCLI="$(strTrim "${my_fileCLI} ${fileCLI}" 2)"
+  my_fileCLILNK="$(strTrim "${my_fileCLILNK} ${fileCLILNK}" 2)"
+
+  unset domstr ido foundFilePath
+  # ---------- END:: Boundary conditions files
+
+
+  # ---------- BEG:: Forcing files (if any are required)
+  #
+  # We possibly have "forcing" files for all ROMS domains, but
+  # these will be supplied by the user in a sequential list of
+  # files, which are handled here
+  if [ -n "${my_USE_FRC:+1}" ]; then
+    # Check if the user supplied the forcing data directories;
+    # if not use the DATA_DIR; if DATA_DIR is not defined use the current directory
+    if [ -z "${FRC_DIR:-}" ]; then
+      if [ -z "${DATA_DIR:-}" ]; then
+        my_FRC_DIR=". ./force"
+      else
+        for idir in ${DATA_DIR}
+        do
+          my_FRC_DIR="${my_FRC_DIR} ${idir} ${idir}/force"
+        done
+      fi
+    else
+      my_FRC_DIR="${FRC_DIR}"
+    fi
+    # This removes dublicate entries without sorting the output
+    my_FRC_DIR="$( strRmDuplicate "${my_FRC_DIR}" )"
+
+
+    ##### Check if the user supplied prefixes for the forcing datafiles (mandatory)
+    if [ -z "${frcPFX:-}" ]; then
+      procError "Prefix(es) for the input forcing filenames need to be provided," \
+                "this prefix is used to identify the files in the data directory(ies)" \
+                "  FRC_DIR = ${FRC_DIR:-UNDEF}" \
+                "   frcPFX = ${frcPFX:-UNDEF}"
+    fi
+    my_FPFX=( ${frcPFX} )
+
+
+    ##### Check if the user supplied suffixes for the forcing datafiles (optional)
+    myTmpVal=( ${frcSFX} )
+    for ((ipfx=0; ipfx<${#my_FPFX[@]}; ipfx++))
+    do
+      idx=${ipfx}
+      if [ -z "${myTmpVal[${idx}]:-}" ]; then
+        idx=$(( ${ipfx} - 1))
+        [ ${idx} -le 0 ] && idx=0
+      fi
+      my_FSFX[${ipfx}]="${myTmpVal[${idx}]}"
+    done
+    my_FSFX=( ${my_FSFX[@]:0:${#my_FPFX[@]}} )
+    unset idx ipfx myTmpVal
+
+
+    ##### Generate the list of forcing files
+    my_DIRS=
+    for idir in ${my_FRC_DIR}
+    do
+      myTmpVal="${idir} ${idir}${firstYR:+/${firstYR}}"
+      myTmpVal="${myTmpVal} ${idir}${firstYR:+/${firstYR}}${firstMO:+/${firstMO}}"
+      for idir in ${myTmpVal}
+      do
+        $( checkDIR -rx "${idir}" ) && my_DIRS="${my_DIRS} ${idir}"
+      done
+    done
+    # This removes dublicate entries without sorting the output
+    my_DIRS="$( strRmDuplicate "${my_DIRS}" )"
+
+    for ((ifl = 0; ifl < ${#my_FPFX[@]}; ifl++))
+    do
+      my_FEXPR=
+      for ixpr in YMD YJ YM Y
+      do
+        xpr1="${my_FPFX[${ifl}]}(.*)?$( getDateExpr ${ixpr} ${firstYR} ${firstMO} ${firstDA} )"
+        if [ $? -eq 0 ]; then
+          xpr1="${xpr1}(.*)?${my_FSFX[${ifl}]}.n(.*)?"
+          my_FEXPR="${my_FEXPR} ${xpr1}"
+        fi
+      done
+      my_FEXPR="${my_FEXPR} ${my_FPFX[${ifl}]}${my_FSFX[${ifl}]}.n(.*)?"
+
+      ncdf_getModDataFile "${my_FEXPR}" "${my_DIRS}" "${my_beg_date}" "${my_end_date}"
+
+      fileFRC="${foundFilePath}"
+      fileFRCLNK="$( basename "${fileFRC}" )"
+      my_fileFRC="${my_fileFRC} ${fileFRC}"
+      my_fileFRCLNK="${my_fileFRCLNK} ${fileFRCLNK}"
+    done
+
+    my_fileFRC="$(strTrim "${my_fileFRC}" 2)"
+    my_fileFRCLNK="$(strTrim "${my_fileFRCLNK}" 2)"
+
+    my_NFFILES=( ${my_fileFRCLNK} )
+    my_NFFILES="${#my_NFFILES[@]}"
+  fi
+  # ---------- END:: Forcing files (if any are required)
+
+
+  # ---------- BEG:: Prepare the ocnINP file
+  # generation frequency of history files (e.g, 6hours * 3600s / 60.0s = 43200 / 60 = 720)
+  # his_freq, my_HISval are in seconds and my_NDEFHIS (below) in number of time steps
+  my_HISval=( ${his_freq:-86400} )
+    my_HISval="$(echo "scale=0; ${my_HISval[0]}" | bc -ql 2>/dev/null)"
+
+  # output restart frequency (e.g, 6hours * 3600s / 60.0s = 43200 / 60 = 720)
+  # rst_freq, my_NRSTval are in seconds and my_NRST (below) in number of time steps
+  my_NRSTval=( ${rst_freq:-86400} )
+    my_NRSTval=" $(echo "scale=0; ${my_NRSTval[0]}" | bc -ql 2>/dev/null)"
+
+  for ((ido = 0; ido < ${nDOMS}; ido++))
+  do
+    # time steps are in seconds
+    my_DTval=600
+    [ -n "${my_domDT:+1}" ] && my_DTval="${my_domDT[${ido}]}"
+    my_DT="${my_DT} $(echo "scale=0; ${my_DTval}/1" | bc -ql 2>/dev/null).0d0"
+
+    # number of barotropic time steps
+    my_NDTFASTval=30
+    [ -n "${my_domNDTFAST:+1}" ] && my_NDTFASTval="${my_domNDTFAST[${ido}]}"
+    my_NDTFAST="${my_NDTFAST} $(echo "scale=0; ${my_NDTFASTval}/1" | bc -ql 2>/dev/null)"
+    
+    # create new history file every "my_NDEFHIS" number of time steps
+    # (one value per domain)
+    my_NDEFHIS="${my_NDEFHIS} $(echo "scale=0; ${my_HISval} / ${my_DTval}" | bc -ql 2>/dev/null)"
+
+    # write "my_NHIS" records of history fields in each history file
+    my_HFRMval=86400
+    [ -n "${my_domHFRM:+1}" ] && my_HFRMval="${my_domHFRM[${ido}]}"
+    my_NHIS="${my_NHIS} $(echo "scale=0; ${my_HFRMval} / ${my_DTval}" | bc -ql 2>/dev/null)"
+
+    # restart flag, 0 = initialization, -1 = use the last restart record
+    my_NRRECval="-1"
+    [ ${FORCE_INI} -gt 0 ] && my_NRRECval=0
+    my_NRREC="${my_NRREC} ${my_NRRECval}"
+
+    # restart frequencies in number of time steps
+    my_NRST="${my_NRST} $(echo "scale=0; ${my_HFRMval} / ${my_DTval}" | bc -ql 2>/dev/null)"
+
+    # run total for rdays (NTIMES = (1day * 86400s / my_DT) * rdays)
+    # NOTE: division in bc honors the scale argument, thus the ")/1" below
+    my_NTIMESval="$(echo "scale=0; (${ntimes[${ido}]} + ( 86400.0 / ${my_DTval} ) * ${rdays})/1" | bc -ql 2>/dev/null)"
+    my_NTIMES="${my_NTIMES} ${my_NTIMESval}"
+  done
+
+  ##### multiple value fields (up to number of requested nests)
+# # Lm
+# xpr1="$( Make_BlockText ${ocnINP} "Lm" "${my_Lm}" 4 2 )"
+# Put_BlockText ${ocnINP} "Lm" "${xpr1}"
+# # Mm
+# xpr1="$( Make_BlockText ${ocnINP} "Mm" "${my_Mm}" 4 2 )"
+# Put_BlockText ${ocnINP} "Mm" "${xpr1}"
+# # N
+# if [ -n "${my_N:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "N" "${my_N}" 4 2 )"
+#   Put_BlockText ${ocnINP} "N" "${xpr1}"
+# fi
+# # theta_s
+# if [ -n "${my_theta_s:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "theta_s" "${my_theta_s}" 4 2 )"
+#   Put_BlockText ${ocnINP} "theta_s" "${xpr1}"
+# fi
+# # theta_b
+# if [ -n "${my_theta_b:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "theta_b" "${my_theta_b}" 4 2 )"
+#   Put_BlockText ${ocnINP} "theta_b" "${xpr1}"
+# fi
+# # Tcline
+# if [ -n "${my_Tcline:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "Tcline" "${my_Tcline}" 4 2 )"
+#   Put_BlockText ${ocnINP} "Tcline" "${xpr1}"
+# fi
+# # Vtransform
+# if [ -n "${my_Vtransform:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "Vtransform" "${my_Vtransform}" 4 2 )"
+#   Put_BlockText ${ocnINP} "Vtransform" "${xpr1}"
+# fi
+# # Vstretching
+# if [ -n "${my_Vstretching:+1}" ]; then
+#   xpr1="$( Make_BlockText ${ocnINP} "Vstretching" "${my_Vstretching}" 4 2 )"
+#   Put_BlockText ${ocnINP} "Vstretching" "${xpr1}"
+# fi
+
+  # NTIMES
+  xpr1="$( Make_BlockText ${ocnINP} "NTIMES" "${my_NTIMES}" 4 2 )"
+  Put_BlockText ${ocnINP} "NTIMES" "${xpr1}"
+  # DT
+  xpr1="$( Make_BlockText ${ocnINP} "DT" "${my_DT}" 4 2 )"
+  Put_BlockText ${ocnINP} "DT" "${xpr1}"
+  # NDTFAST
+  xpr1="$( Make_BlockText ${ocnINP} "NDTFAST" "${my_NDTFAST}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDTFAST" "${xpr1}"
+  # NRREC
+  xpr1="$( Make_BlockText ${ocnINP} "NRREC" "${my_NRREC}" 4 2 )"
+  Put_BlockText ${ocnINP} "NRREC" "${xpr1}"
+  # NRST
+  xpr1="$( Make_BlockText ${ocnINP} "NRST" "${my_NRST}" 4 2 )"
+  Put_BlockText ${ocnINP} "NRST" "${xpr1}"
+  # NDEFHIS
+  xpr1="$( Make_BlockText ${ocnINP} "NDEFHIS" "${my_NDEFHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDEFHIS" "${xpr1}"
+  # NHIS
+  xpr1="$( Make_BlockText ${ocnINP} "NHIS" "${my_NHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NHIS" "${xpr1}"
+  # NDEFAVG
+  xpr1="$( Make_BlockText ${ocnINP} "NDEFAVG" "${my_NDEFHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDEFAVG" "${xpr1}"
+  # NAVG
+  xpr1="$( Make_BlockText ${ocnINP} "NAVG" "${my_NHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NAVG" "${xpr1}"
+  # NDEFDIA
+  xpr1="$( Make_BlockText ${ocnINP} "NDEFDIA" "${my_NDEFHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDEFDIA" "${xpr1}"
+  # NDIA
+  xpr1="$( Make_BlockText ${ocnINP} "NDIA" "${my_NHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDIA" "${xpr1}"
+  # NDEFTLM
+  xpr1="$( Make_BlockText ${ocnINP} "NDEFTLM" "${my_NDEFHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDEFTLM" "${xpr1}"
+  # NTLM
+  xpr1="$( Make_BlockText ${ocnINP} "NTLM" "${my_NHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NTLM" "${xpr1}"
+  # NDEFADJ
+  xpr1="$( Make_BlockText ${ocnINP} "NDEFADJ" "${my_NDEFHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NDEFADJ" "${xpr1}"
+  # NADJ
+  xpr1="$( Make_BlockText ${ocnINP} "NADJ" "${my_NHIS}" 4 2 )"
+  Put_BlockText ${ocnINP} "NADJ" "${xpr1}"
+
+  # ---------- Input files
+  # GRDNAME
+  xpr1="$( Make_BlockText ${ocnINP} "GRDNAME" "${my_fileGRDLNK}" 1 2 )"
+  Put_BlockText ${ocnINP} "GRDNAME" "${xpr1}"
+  # ININAME
+  xpr1="$( Make_BlockText ${ocnINP} "ININAME" "${my_fileINILNK}" 1 2 )"
+  Put_BlockText ${ocnINP} "ININAME" "${xpr1}"
+  # BRYNAME
+  xpr1="$( Make_BlockText ${ocnINP} "BRYNAME" "${my_fileBRYLNK}" 1 2 )"
+  Put_BlockText ${ocnINP} "BRYNAME" "${xpr1}"
+  # CLMNAME
+  xpr1="$( Make_BlockText ${ocnINP} "CLMNAME" "${my_fileCLILNK}" 1 2 )"
+  Put_BlockText ${ocnINP} "CLMNAME" "${xpr1}"
+
+  # ---------- Forcing files
+  if [ -n "${my_USE_FRC:+1}" ]; then
+    # NFFILES
+    xpr1="$( Make_BlockText ${ocnINP} "NFFILES" "${my_NFFILES}" 4 2 )"
+    Put_BlockText ${ocnINP} "NFFILES" "${xpr1}"
+    # FRCNAME
+    xpr1="$( Make_BlockText ${ocnINP} "FRCNAME" "${my_fileFRCLNK}" 1 2 )"
+    Put_BlockText ${ocnINP} "FRCNAME" "${xpr1}"
+  fi
+
+  # ---------- Output files
+  # GSTNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_gst/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "GSTNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "GSTNAME" "${xpr1}"
+  # RSTNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_rst/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "RSTNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "RSTNAME" "${xpr1}"
+  # HISNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_his/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "HISNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "HISNAME" "${xpr1}"
+  # TLMNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_tlm/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "TLMNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "TLMNAME" "${xpr1}"
+  # TLFNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_tlf/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "TLFNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "TLFNAME" "${xpr1}"
+  # ADJNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_adj/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "ADJNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "ADJNAME" "${xpr1}"
+  # AVGNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_avg/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "AVGNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "AVGNAME" "${xpr1}"
+  # DIANAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_dia/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "DIANAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "DIANAME" "${xpr1}"
+  # STANAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_sta/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "STANAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "STANAME" "${xpr1}"
+  # FLTNAME
+  xpr1="$( echo "${my_fileOUT}" | sed 's/_out/_flt/g' )"
+  xpr1="$( Make_BlockText ${ocnINP} "FLTNAME" "${xpr1}" 1 2 )"
+  Put_BlockText ${ocnINP} "FLTNAME" "${xpr1}"
+  # ---------- END:: Prepare the ocnINP file
+
+
+  # ---------- BEG:: Make the links to the data/input files
+  if [ -n "${my_fileGRD:+1}" ]; then
+    file1=( ${my_fileGRD} )
+    file2=( ${my_fileGRDLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileINI:+1}" ]; then
+    file1=( ${my_fileINI} )
+    file2=( ${my_fileINILNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileBRY:+1}" ]; then
+    file1=( ${my_fileBRY} )
+    file2=( ${my_fileBRYLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_fileCLI:+1}" ]; then
+    file1=( ${my_fileCLI} )
+    file2=( ${my_fileCLILNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+
+  if [ -n "${my_USE_FRC:+1}" ]; then
+    file1=( ${my_fileFRC} )
+    file2=( ${my_fileFRCLNK} )
+    nfiles=${#file1[@]}
+    for ((ifl = 0; ifl < ${nfiles}; ifl++))
+    do
+      linkFILE ${file1[${ifl}]} ${file2[${ifl}]}
+    done
+  fi
+  # ---------- END:: Make the links to the data/input files
+
+  ocnLINKFILES="${my_fileGRDLNK} ${my_fileINILNK} ${my_fileBRYLNK} ${my_fileCLILNK} ${my_fileFRCLNK}"
+  export ocnLINKFILES
+}
+
+# -------------------------------------------------------
+# Get_ROMSDateString()
+# Usage:     Get_ROMSDateString inp_file
+# Parameters:
+# inp_file : The name of the ROMS data file (NetCDF).
+#
+# Returns : 0 (success)
+# Echoes  : None
+# Imports : NONE
+# Exports : Exported parameters to the environment are:
+#             ROMSDateString
+#      ROMSDateString = The soft links to the input data created by calling
+#                       this functions.
+# Modifies : NONE
+#
+# Get_ROMSDateString: Gets the first date string from ROMS NetCDF data file.
+# -------------------------------------------------------
+Get_ROMSDateString()
+{
+  local -i retval=0
+  local my_file="${1}" my_cdf my_time="ocean_time"
+  local curT_str cur_DATE cur_HH cur_MM cur_SS
+  local idx
+
+  unset ROMSDateString
+
+  ncdf_getVar "${my_file}" "${my_time}" "-v" 2>&1
+  curT_str="$(echo ${ncdfVarVal})"
+  curT_str=( $(tr ' ' '\n' <<<${curT_str} | cat -n | sort -k2,2nr | head -n1) )
+  idx=$(( ${curT_str[0]} - 1 ))
+
+  ncdf_getVar "${my_file}" "${my_time}" "-t -v"
+  curT_str="$(echo ${ncdfVarVal})"
+  curT_str="$(echo ${curT_str} | sed 's/\"[[:space:]]\"/\",\"/g' | sed 's/[[:space:]]/_/g')"
+  curT_str=( $(echo ${curT_str} | sed 's/\",\"/\" \"/g') )
+  curT_str="$(echo ${curT_str[${idx}]} | sed 's/[;:,_\"\{\}]/ /g')"
+
+  cur_DATE="$( echo "${curT_str}" | awk '{ printf $1 }' )"
+  cur_HH="$( echo "${curT_str}" | awk '{ printf $2 }' )"
+    [ -z "${cur_HH:-}" ] && cur_HH="00"
+  cur_MM="$( echo "${curT_str}" | awk '{ printf $3 }' )"
+    [ -z "${cur_MM:-}" ] && cur_MM="00"
+  cur_SS="00"
+
+  # unset any global variables that are not needed outside this function
+  unset ncdfVarVal
+
+  export  ROMSDateString="${cur_DATE:+${cur_DATE}_}${cur_HH}:${cur_MM}:${cur_SS}"
+
+  return ${retval}
+}
+
+Move_ROMSFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_files f_inp f_out
+  local f_pfx f_sfx f_date
+  local ilst date
+
+  local logfile="${LOG_SCRIPT:-logfile.log}"
+  local outdir="${OUT_DIR:-}"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_ROMS
+
+  [ -z "${USE_ROMS:-}" ] && return 0
+
+  $( ! checkDIR -rx "${outdir}" ) && outdir=
+
+
+  ### Remove any links created during the simulation.
+  if [ -n "${ocnLINKFILES:+1}" ]; then
+    my_files="${ocnLINKFILES}"
+    for ilst in ${my_files}
+    do
+      if $( checkFILE -rL "${ilst}" ); then
+        echo "       Removing:  ${ilst}" >> ${logfile}
+        rm -f ${ilst}
+      fi
+    done
+  fi
+
+
+  ### Rename and move all output files created during the simulation.
+  my_files="ocn_gst* ocn_his* ocn_tlm*
+            ocn_tlf* ocn_adj* ocn_avg*
+            ocn_dia* ocn_sta* ocn_flt*
+           "
+
+  for ilst in ${my_files}
+  do
+    f_date=
+    f_inp="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      if [ -n "$( isNcdf "${f_inp}" )" ]; then
+        # output time stamp
+        f_date=( $( ncdf_getTimeStamp "${f_inp}" ) )
+        [ ${#f_date[@]} -ne 0 ] && f_date="${f_date[0]}"
+
+        f_sfx=".nc"
+
+        if [ -n "${f_date:+1}" ]; then
+          f_out="$(strstr ${f_inp} "_[0-9]*")"
+          f_out="${f_inp%*${f_out}}"
+          f_out="${f_out%*${f_sfx}}"
+        else
+          f_out="${f_inp%*${f_sfx}}"
+        fi
+        f_out="${outdir:+${outdir}/}${f_out}${f_date:+_${f_date}}${f_sfx}"
+
+        echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+        mv -f "${f_inp}" "${f_out}"
+      else
+        f_sfx=".dat"
+
+        f_out="${f_inp%*${f_sfx}}"
+        f_out="${outdir:+${outdir}/}${f_out}${f_date:+_${f_date}}${f_sfx}"
+
+        echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+        mv -f "${f_inp}" "${f_out}"
+      fi
+    fi
+  done
+
+
+  ### Rename and move all restart files created during the simulation.
+  my_files="ocn_rst*"
+
+  for ilst in ${my_files}
+  do
+    f_date=
+    f_inp="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      if [ -n "$( isNcdf "${f_inp}" )" ]; then
+        # output file names
+        f_date=( $( ncdf_getTimeStamp "${f_inp}" ) )
+        [ ${#f_date[@]} -ne 0 ] && f_date="${f_date[${#f_date[@]}-1]}"
+
+        f_sfx=".nc"
+
+        if [ -n "${f_date:+1}" ]; then
+          f_out="$(strstr ${f_inp} "_[0-9]*")"
+          f_out="${f_inp%*${f_out}}"
+          f_out="${f_out%*${f_sfx}}"
+        else
+          f_out="${f_inp%*${f_sfx}}"
+        fi
+        f_out="${outdir:+${outdir}/}${f_out}${f_date:+_${f_date}}${f_sfx}"
+
+        echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+        mv -f "${f_inp}" "${f_out}"
+      else
+        f_sfx=".dat"
+
+        f_out="${f_inp%*${f_sfx}}"
+        f_out="${outdir:+${outdir}/}${f_out}${f_date:+_${f_date}}${f_sfx}"
+
+        echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+        mv -f "${f_inp}" "${f_out}"
+      fi
+    fi
+  done
+
+  return 0
+}
+############################################################
+
+
+############################################################
+##### HYCOM RELATED FUNCTIONS
+############################################################
+hyc_TopoFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_UPFX
+  local my_LDIR
+  local inp_file inp_line inp_dirs
+
+  local reg_str="regional"
+
+  local opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+
+  [ -n "${ocnGRDLINKS:+1}" ] && rm -f ${ocnGRDLINKS}
+  unset ocnGRDLINKS
+
+  inp_dirs="$( getDirList bath )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Check bathymetry/topography files and make the links.
+  # In HYCOM we need to have *depth.{a, b} and *grid.{a, b} files.
+  # Check for bathymetry/topography files in all "inp_dirs" and make
+  # the links in the current directory.
+  if [ -n "${1:+1}" ]; then
+    reg_str="$( echo "${1}" | \
+                sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+  fi
+
+  hyc_GetDataLink --var="${reg_str}.depth" \
+                  --fpfx="${my_UPFX}" --lpfx="" \
+                  --ldir="${my_LDIR}" \
+                  --dirs="${inp_dirs}"
+
+  hyc_GetDataLink --var="${reg_str}.grid" \
+                  --fpfx="${my_UPFX}" --lpfx="" \
+                  --ldir="${my_LDIR}" \
+                  --dirs="${inp_dirs}"
+  # -----
+
+
+  export ocnGRDLINKS="${ocnDATALINKS}"
+
+  return 0
+}
+
+hyc_MakePatch()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local nm_prog="partit" my_prog
+  local out_file="patch.input"
+
+  local my_UPFX="regional"
+  local my_DIRLNK
+  
+  local depthA depthB gridA gridB
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local chk_v1 chk_v2 line
+
+  local xtil=1 ytil=1 fudge="9.0"
+
+  local opt_all opt_opt opt_arg
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_MPI USE_OpenMP
+
+  [ -z "${USE_MPI:-}"    ] && \
+  [ -z "${USE_OpenMP:-}" ] && return 0
+
+
+  # -----
+  # Process the function options
+  opt_all=( xtile ytile fudge pfx )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -xtile | --xtile )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              xtil=$( getPosInteger "${opt_arg}" )
+              if [ -z "${xtil:-}" ]; then
+                procError "The domain partitioning requires that all"\
+                          "partition dimensions are greater or equal to 1:" \
+                          "  # of xtiles = ${xtil}" \
+                          "Please modify the input to this function."
+              fi
+          fi
+        ;;
+      -ytile | --ytile )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              ytil=$( getPosInteger "${opt_arg}" )
+              if [ -z "${ytil:-}" ]; then
+                procError "The domain partitioning requires that all"\
+                          "partition dimensions are greater or equal to 1:" \
+                          "  # of ytiles = ${ytil}" \
+                          "Please modify the input to this function."
+              fi
+          fi
+        ;;
+      -fudge | --fudge )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+            fudge="${opt_arg}"
+            if ! $( isPosNumber "${fudge}" ) ; then
+              procError "The fudge factor should be: 0.5 <= fudge <= 9.9" \
+                        "  fudge = ${fudge}" \
+                        "Please modify the input to this function."
+            fi
+          fi
+        ;;
+      -pfx | --pfx )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+            my_UPFX="$( echo "${opt_arg}" | \
+                        sed -e 's/[=;:,_\{\}\\[:space:]]//g' | \
+                        awk '{print $1}' )"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  depthA="${my_UPFX}.depth.a"
+  depthB="${my_UPFX}.depth.b"
+  gridA="${my_UPFX}.grid.a"
+  gridB="${my_UPFX}.grid.b"
+
+
+  # xtile,ytile: 2-d node grid (-ve for constant-sized tiles)
+  # xtile: number of tiles in W-E direction: 1<= xtile <= 64
+  # ytile: number of tiles in S-N direction: 1<= ytile <= 64
+  # fudge: 0.5 <= fudge <= 9.9
+  # fudge:  size fudge factor (0.5 to 9.9, larger for more variation)
+  #            < 1.0 to keep all  constant-sized tiles
+  #            > 9.0 to shift     constant-sized tiles
+  #            > 9.8 to double-up constant-sized tiles
+
+  ### Check for the required program
+  for ilst in ${nm_prog} Bin/${nm_prog}
+  do
+    if $( checkPROG ${ilst} ); then
+      my_prog=${ilst}
+      break
+    fi
+  done
+  if [ -z "${my_prog:-}" ]; then
+    procError "The following required program were not found:" \
+              "  program = ${nm_prog}" \
+              "in any of the following directories:" \
+              "  curent:      ${cwd}" \
+              "  current/Bin: ${cwd}/Bin" \
+              "This program is used to partition the domain in tiles."
+  fi
+
+  ### Check for the required input data
+  for ilst in ${gridB} ${depthA} ${depthB}
+  do
+    if ! $( checkFILE ${ilst} ); then
+      procError "The following required file were not found:" \
+                "  File = ${ilst}" \
+                "Make sure that the file exists in the current directory."
+    fi
+  done
+
+  ### Check the tiles in both directions
+  if [ ${xtil:-0} -lt 1 -o ${ytil:-0} -lt 1 ]; then
+    procError "The domain partitioning requires that both"\
+              "partition dimensions are greater or equal to 1:" \
+              "  # of xtiles = ${xtil:-UNDEF}" \
+              "  # of ytiles = ${ytil:-UNDEF}" \
+              "Please modify the input to this function."
+  fi
+
+  ### Check the fudge factor
+  fudge="$(echo "${fudge}" | awk '{printf "%.2f", $1}')"
+  chk_v1=$( echo "${fudge} < 0.5" | bc -ql 2>/dev/null )
+  chk_v2=$( echo "${fudge} > 9.9" | bc -ql 2>/dev/null )
+  if [ ${chk_v1} -eq 1 -o ${chk_v2} -eq 1 ]; then
+    procError "The fudge factor should be: 0.5 <= fudge <= 9.9" \
+              "  fudge = ${fudge}" \
+              "Please modify the input to this function."
+  fi
+
+
+  ### Set the needed environment variables
+  export FOR051=${depthB}
+  export FOR051A=${depthA}
+
+  [ -f "${out_file}" ] && rm -f ${out_file}
+
+  echo "${xtil} ${ytil} ${fudge}" | ${my_prog} >/dev/null 2>&1
+
+  if [ -f "fort.21" ]; then
+    mv -f fort.21 ${out_file}
+  else
+    procError "The program: <${my_prog}> failed"\
+              "please make sure that the following configuration is valid:" \
+              "  # of xtiles = ${xtil:-UNDEF}" \
+              "  # of ytiles = ${ytil:-UNDEF}" \
+              "        fudge = ${fudge:-UNDEF}"
+  fi
+
+  if [ -f "${out_file}" ]; then
+    line="$( awk 'NR==2' ${out_file} )"
+    chk_v1="$( echo "${line}" | awk '{print $2}' )"
+    chk_v2="$( echo "${line}" | awk '{print $3}' )"
+    if [ ${xtil} -ne ${chk_v1:-0} -o ${ytil} -ne ${chk_v2:-0} ]; then
+      procError "The program: <${my_prog}> produced inconsistent results" \
+                 "check the file: ${out_file} and make sure that the " \
+                 "following configuration is valid:" \
+                 "  # of xtiles = ${xtil:-UNDEF}" \
+                 "  # of ytiles = ${ytil:-UNDEF}" \
+                 "        fudge = ${fudge:-UNDEF}"
+    fi
+  fi
+  
+  unset FOR051 FOR051A
+
+  return 0
+}
+
+hyc_MakeLimits()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local nm_prog="hycom_ymdh_wind" my_prog
+  local out_file="limits"
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local b_date b_day b_jul
+  local b_YR b_MO b_DA b_HR b_MN b_SC
+  local e_date e_day e_jul
+  local e_YR e_MO e_DA e_HR e_MN e_SC
+
+  local iniflg=0
+
+  local opt_all opt_opt opt_arg
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  # -----
+  # Process the function options
+  opt_all=( start end ini )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -start | --start )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              b_date="${opt_arg}"
+          fi
+        ;;
+      -end | --end )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              e_date="${opt_arg}"
+          fi
+        ;;
+      -ini | --ini )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          # iniflg is an integer
+          # iniflg <= 0: use a restart file created from this simulation
+          #              or externally
+          # iniflg  > 0: assume that the model is to be initialized
+          opt_arg="$( echo "${opt_arg}" | sed -e 's/[+[:space:]]//g' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              if ! $( isInteger "${opt_arg}" ) ; then
+                procError "The initialization flag <iniflg> variable should be an integer" \
+                          "  iniflg = ${opt_arg}" \
+                          "iniflg <= 0: use a restart file created from this simulation" \
+                          "             or externally" \
+                          "iniflg  > 0: assume that the model is to be initialized" \
+                          "Please modify the input to this function."
+              fi
+              iniflg="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the required program(s)
+  for ilst in ${nm_prog} Bin/${nm_prog}
+  do
+    if $( checkPROG ${ilst} ); then
+      my_prog=${ilst}
+      break
+    fi
+  done
+  if [ -z "${my_prog:-}" ]; then
+    procError "The following required program were not found:" \
+              "  program = ${nm_prog}" \
+              "in any of the following directories:" \
+              "  curent:      ${cwd}" \
+              "  current/Bin: ${cwd}/Bin" \
+              "This program is used to create the file: ${out_file}."
+  fi
+
+  ### Check for the input dates
+  b_date=( $( getDate --date="${b_date:-UNDEF}" --fmt='+%Y %m %d %H %M %S' ) )
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"start\" date for the simulation." \
+              "  First Date = ${b_date:-UNDEF}"
+  fi
+  b_YR=${b_date[0]}
+  b_MO=${b_date[1]}
+  b_DA=${b_date[2]}
+  b_HR=${b_date[3]}
+  b_MN=${b_date[4]}
+  b_SC=${b_date[5]}
+
+  e_date=( $( getDate --date="${e_date:-UNDEF}" --fmt='+%Y %m %d %H %M %S' ) )
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"end\" date for the simulation." \
+              "  Last Date = ${e_date:-UNDEF}"
+  fi
+  e_YR=${e_date[0]}
+  e_MO=${e_date[1]}
+  e_DA=${e_date[2]}
+  e_HR=${e_date[3]}
+  e_MN=${e_date[4]}
+  e_SC=${e_date[5]}
+
+  ### Create the "out_file" file
+  [ -f "${out_file}" ] && rm -f ${out_file}
+ 
+    b_day=$( echo "${b_YR} ${b_MO} ${b_DA} ${b_HR}" | \
+             ${my_prog} 2>/dev/null )
+  STATUS=$(( ${STATUS} + $? ))
+
+    b_day=$(echo "${b_day}" | awk '{print $1}')
+
+    e_day=$(echo "${e_YR} ${e_MO} ${e_DA} ${e_HR}" | \
+             ${my_prog} 2>/dev/null )
+  STATUS=$(( ${STATUS} + $? ))
+    e_day=$(echo "${e_day}" | awk '{print $1}')
+  
+  if [ ${STATUS} -ne 0 ]; then
+    procError "The program <${my_prog}> failed to run successfully." \
+              "  First Date: ${b_YR} ${b_MO} ${b_DA} ${b_HR}" \
+              "   Last Date: ${e_YR} ${e_MO} ${e_DA} ${e_HR}" \
+              "Please check for a possible misconfiguration."
+  fi
+
+  if [ ${iniflg} -le 0 ]; then
+    echo "${b_day} ${e_day}" | \
+         awk '{printf " %11.2f %11.2f    false    false\n",  $1, $2}' > ${out_file}
+  else
+    echo "-${b_day} ${e_day}" | \
+         awk '{printf " %11.2f %11.2f    false    false\n",  $1, $2}' > ${out_file}
+  fi
+
+  return 0
+}
+
+hyc_MakePorts()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local inp_file inp_line
+  local my_files f_inp f_out
+
+  local tidflg
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local opt_all opt_opt opt_arg
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  # -----
+  # Process the function options
+  opt_all=( inp )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -inp | --inp )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              inp_file="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the input file
+  if ! $( checkFILE -r "${inp_file}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_file:-UNDEF}"
+  fi
+  # -----
+
+
+  # -----
+  # Get all the required data and variables necessary for
+  # subsequent calculations.
+  ### Read the input file and get the following variables
+  tidflg="$( hyc_GetBlkDatValue ${inp_file} tidflg "" )"
+    [ $? -ne 0 ] && procError "${tidflg}"
+  # -----
+
+
+  # -----
+  # Check for the ports template file and create the corresponding file.
+  # Template files should exist in the current directory.
+  my_files="ports.input"
+
+  for ilst in ${my_files}
+  do
+    f_inp="${ilst}-tmpl"
+    f_out="${ilst}"
+    if $( checkFILE -r "${f_inp}" ); then
+      [ -f ${f_out} ] && rm -f ${f_out}
+      cp -f ${f_inp} ${f_out}
+    else
+      procError "Could not find the required HYCOM ports input file:" \
+                "  File = ${f_inp}"
+    fi
+  done
+  # -----
+
+
+  # -----
+  # Check for tidal boundary conditions and create the corresponding files.
+  # Template files should exist in the current directory.
+  if [ ${tidflg} -eq 1 -o ${tidflg} -eq 3 ]; then
+    my_files="ports_a.input ports_u.input ports_v.input ports_z.input"
+
+    for ilst in ${my_files}
+    do
+      f_inp="${ilst}-tmpl"
+      f_out="${ilst}"
+      if $( checkFILE -r "${f_inp}" ); then
+        [ -f ${f_out} ] && rm -f ${f_out}
+        cp -f ${f_inp} ${f_out}
+      else
+        procError "Could not find the required HYCOM ports tidal input file:" \
+                  "    File = ${f_inp}" \
+                  "  tidflg = ${tidflg} (from blkdat.input)"
+      fi
+    done
+  fi
+  # -----
+
+  return 0
+}
+
+hyc_MakeTracers()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local inp_file inp_line
+  local my_files f_inp f_out
+
+  local ntracr
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local opt_all opt_opt opt_arg
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  # -----
+  # Process the function options
+  opt_all=( inp )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -inp | --inp )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              inp_file="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the input file
+  if ! $( checkFILE -r "${inp_file}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_file:-UNDEF}"
+  fi
+  # -----
+
+
+  # -----
+  # Get all the required data and variables necessary for
+  # subsequent calculations.
+  ### Read the input file and get the following variables
+  ntracr="$( hyc_GetBlkDatValue ${inp_file} ntracr "" )"
+    [ $? -ne 0 ] && procError "${ntracr}"
+  # -----
+
+
+  # -----
+  # Check for the tracer template file and create the corresponding file.
+  # Template files should exist in the current directory.
+  if [ ${ntracr} -lt 0 ]; then
+    my_files="tracer.input"
+
+    for ilst in ${my_files}
+    do
+      f_inp="${ilst}-tmpl"
+      f_out="${ilst}"
+      if $( checkFILE -r "${f_inp}" ); then
+        [ -f ${f_out} ] && rm -f ${f_out}
+        cp -f ${f_inp} ${f_out}
+      else
+        procError "Could not find the required HYCOM tracer input file:" \
+                  "  File = ${f_inp}"
+      fi
+    done
+  fi
+  # -----
+
+  return 0
+}
+
+hyc_BdryFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local nm_prog_ymdh="hycom_ymdh_wind" my_prog_ymdh
+  local nm_prog_nest="hycom_nest_dates" my_prog_nest
+
+  local my_UPFX="hycbdy_"
+  local my_LDIR="nest"
+  local inp_file inp_line inp_dirs
+
+  local b_date b_day b_jul
+  local b_YR b_MO b_DA b_HR b_MN b_SC
+  local e_date e_day e_jul
+  local e_YR e_MO e_DA e_HR e_MN e_SC
+
+  local nstoff yrflag bnstfq nestfq
+  local nest_args nest_dates
+
+  local    ilst jlst klst
+  local -i icnt=0 jcnt=0 kcnt=0
+
+  local opt_all opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  [ -n "${ocnBRYLINKS:+1}" ] && rm -f ${ocnBRYLINKS}
+  unset ocnBRYLINKS
+
+  inp_dirs="$( getDirList boundary )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Process the function options
+  opt_all=( inp start end nstoff )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -inp | --inp )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              inp_file="${opt_arg}"
+          fi
+        ;;
+      -start | --start )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              b_date="${opt_arg}"
+          fi
+        ;;
+      -end | --end )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              e_date="${opt_arg}"
+          fi
+        ;;
+      -nstoff | --nstoff )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          # nstoff is always in days, a positive number
+          # initial day for nesting (default 0.0)
+          if [ "X${opt_arg}" != "X" ]; then
+              nstoff="$( echo "${opt_arg}" | sed -e 's/[+[:space:]]//g' )"
+              if ! $( isPosNumber "${nstoff}" ) ; then
+                procError "The nest offset <nstoff> variable should have" \
+                          "a value greater or equal to zero" \
+                          "  nstoff = ${opt_arg}" \
+                          "Please modify the input to this function."
+              fi
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the required program(s)
+  for ilst in ${nm_prog_ymdh} Bin/${nm_prog_ymdh}
+  do
+    if $( checkPROG ${ilst} ); then
+      my_prog_ymdh=${ilst}
+      break
+    fi
+  done
+  if [ -z "${my_prog_ymdh:-}" ]; then
+    procError "The following required program were not found:" \
+              "  program = ${nm_prog_ymdh}" \
+              "in any of the following directories:" \
+              "  curent:      ${cwd}" \
+              "  current/Bin: ${cwd}/Bin"
+  fi
+
+  for ilst in ${nm_prog_nest} Bin/${nm_prog_nest}
+  do
+    if $( checkPROG ${ilst} ); then
+      my_prog_nest=${ilst}
+      break
+    fi
+  done
+  if [ -z "${my_prog_nest:-}" ]; then
+    procError "The following required program were not found:" \
+              "  program = ${nm_prog_nest}" \
+              "in any of the following directories:" \
+              "  curent:      ${cwd}" \
+              "  current/Bin: ${cwd}/Bin"
+  fi
+
+  ### Check for the input file
+  if ! $( checkFILE -r "${inp_file}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_file:-UNDEF}"
+  fi
+
+  ### Check for the input dates
+  b_date=( $( getDate --date="${b_date:-UNDEF}" --fmt='+%Y %m %d %H %M %S' ) )
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"start\" date for the simulation." \
+              "  First Date = ${b_date:-UNDEF}"
+  fi
+  b_YR=${b_date[0]}
+  b_MO=${b_date[1]}
+  b_DA=${b_date[2]}
+  b_HR=${b_date[3]}
+  b_MN=${b_date[4]}
+  b_SC=${b_date[5]}
+
+  e_date=( $( getDate --date="${e_date:-UNDEF}" --fmt='+%Y %m %d %H %M %S' ) )
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"end\" date for the simulation." \
+              "  Last Date = ${e_date:-UNDEF}"
+  fi
+  e_YR=${e_date[0]}
+  e_MO=${e_date[1]}
+  e_DA=${e_date[2]}
+  e_HR=${e_date[3]}
+  e_MN=${e_date[4]}
+  e_SC=${e_date[5]}
+  # -----
+
+
+  # -----
+  # Get all the required data and variables necessary for
+  # subsequent calculations.
+  ### Read the input file and get the following variables
+  yrflag="$( hyc_GetBlkDatValue ${inp_file} yrflag "" )"
+    [ $? -ne 0 ] && procError "${yrflag}"
+  bnstfq="$( hyc_GetBlkDatValue ${inp_file} bnstfq "" )"
+    [ $? -ne 0 ] && procError "${bnstfq}"
+  nestfq="$( hyc_GetBlkDatValue ${inp_file} nestfq "" )"
+    [ $? -ne 0 ] && procError "${nestfq}"
+
+  ### Get the days relative to the reference date
+    b_day=$( echo "${b_YR} ${b_MO} ${b_DA} ${b_HR}" | \
+             ${my_prog_ymdh} 2>/dev/null )
+  STATUS=$(( ${STATUS} + $? ))
+
+    b_day=$(echo "${b_day}" | awk '{print $1}')
+
+    e_day=$(echo "${e_YR} ${e_MO} ${e_DA} ${e_HR}" | \
+             ${my_prog_ymdh} 2>/dev/null )
+  STATUS=$(( ${STATUS} + $? ))
+    e_day=$(echo "${e_day}" | awk '{print $1}')
+
+  if [ ${STATUS} -ne 0 ]; then
+    procError "The program <${my_prog_ymdh}> failed to run successfully." \
+              "  First Date: ${b_YR} ${b_MO} ${b_DA} ${b_HR}" \
+              "   Last Date: ${e_YR} ${e_MO} ${e_DA} ${e_HR}" \
+              "Please check for a possible misconfiguration."
+  fi
+
+  ### Get the nest dates in a format determined by yrflag
+  nest_args="${yrflag}  ${bnstfq}  ${nestfq}  ${b_day}  ${e_day}"
+  [ ${nstoff:-0} -gt 0 ] && \
+    nest_args="${yrflag}  -${nstoff}  ${nestfq}  ${b_day}  ${e_day}"
+
+  nest_dates=( $(echo "${nest_args}" | ${my_prog_nest} 2>/dev/null ) )
+  STATUS=$?
+  if [ ${STATUS} -ne 0 -o ${#nest_dates[@]} -eq 0 ]; then
+    procError "The program <${my_prog_nest}> failed to run successfully." \
+              "  First Date: ${b_YR} ${b_MO} ${b_DA} ${b_HR}" \
+              "   Last Date: ${e_YR} ${e_MO} ${e_DA} ${e_HR}" \
+              "  yrflag = ${yrflag:-UNDEF}" \
+              "  nstoff = ${nstoff:-UNDEF}" \
+              "  bnstfq = ${bnstfq:-UNDEF}" \
+              "  nestfq = ${nestfq:-UNDEF}" \
+              "Please check for a possible misconfiguration."
+  fi
+  # -----
+
+
+  # -----
+  # Check boundary conditions files and make the links.
+  # In HYCOM we need to have *.{a, b} files.
+  # Check for boundary files in all "inp_dirs" and make
+  # the links in the current directory.
+  ### The rmu files.
+  hyc_GetDataLink --var="rmu" \
+                  --fpfx="${my_UPFX}" --lpfx="" \
+                  --ldir="${my_LDIR}" \
+                  --dirs="${inp_dirs}"
+
+  ### The boundary/nest files.
+  for ((icnt=0; icnt<${#nest_dates[@]}; icnt++))
+  do
+    hyc_GetDataLink --var="archv.${nest_dates[${icnt}]}" \
+                    --fpfx="${my_UPFX}" --lpfx="" \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}"
+  done
+
+
+  export ocnBRYLINKS="${ocnDATALINKS}"
+
+  return 0
+}
+
+hyc_InitFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_UPFX="hycini_"
+  local my_LDIR
+  local inp_file inp_line inp_dirs
+  local b_date e_date
+
+  local iniflg=0
+
+  local opt_all opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+
+  [ -n "${ocnINILINKS:+1}" ] && rm -f ${ocnINILINKS}
+  unset ocnINILINKS
+
+  inp_dirs="$( getDirList ini Output )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Process the function options
+  opt_all=( start ini )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -start | --start )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              b_date="${opt_arg}"
+          fi
+        ;;
+      -ini | --ini )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          # iniflg is an integer
+          # iniflg <= 0: use a previous restart file created
+          #              from this simulation
+          # iniflg  > 0: use other restart file created externally
+          #              to this simulation
+          opt_arg="$( echo "${opt_arg}" | sed -e 's/[+[:space:]]//g' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              if ! $( isInteger "${opt_arg}" ) ; then
+                procError "The initialization flag <iniflg> variable should be an integer" \
+                          "  iniflg = ${opt_arg}" \
+                          "iniflg <= 0: use a previous restart file created" \
+                          "             from this simulation" \
+                          "iniflg  > 0: use other restart file created externally" \
+                          "             to this simulation" \
+                          "Please modify the input to this function."
+              fi
+              iniflg="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the input dates
+  b_date="$( getDate --date="${b_date:-UNDEF}" --fmt='+%F %T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"init\" date for the simulation." \
+              "  Init Date = ${b_date:-UNDEF}"
+  fi
+  # -----
+
+
+  # -----
+  # Check initial conditions files and make the links.
+  # In HYCOM we need to have *.{a, b} files.
+  # Check for initial conditions files in all "inp_dirs" and make
+  # the links in the current directory.
+  [ "${iniflg:-0}" -le 0 ] && my_UPFX="ocn_rst_"
+
+  hyc_GetDataLink --var="" \
+                  --fpfx="${my_UPFX}" --lpfx="restart_in" \
+                  --ldir="${my_LDIR}" \
+                  --dirs="${inp_dirs}" \
+                  --date="${b_date}" --dfmt="YMDH"
+  # -----
+
+
+ export ocnINILINKS="${ocnDATALINKS}"
+
+ return 0
+}
+
+hyc_GetDataLink()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local dirLIST nm_FILE my_FILE my_FILELNK
+  local my_FPFX my_LPFX my_LDIR my_FEXPR
+  local tmp_STR
+
+  local my_DATE my_YR my_MO my_DA my_HR my_MN my_SC
+  local ifmt my_DFMT my_DEXPR
+
+  local var fpfx lpfx iext extA=a extB=b
+
+  local opt_all opt_opt opt_arg
+  local -i STATUS=0
+
+
+  # -----
+  # Process the function options
+  opt_all=( var fpfx lpfx ldir dirs date dfmt )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -var | --var )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              var="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -fpfx | --fpfx )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              fpfx="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -lpfx | --lpfx )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              lpfx="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -ldir | --ldir )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              my_LDIR="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -dirs | --dirs )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              dirLIST="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -date | --date )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              my_DATE="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      -dfmt | --dfmt )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              my_DFMT="$( strTrim "${opt_arg}" 2)"
+          fi
+        ;;
+      *)
+          procError "usage: ${nm_func} --var=VAR --fprf=FPFX --lprf=LPFX" \
+                    "         --ldir=LDIR --dirs=DIRS --date=DATE --dfmt=DATE_FMT" \
+                    "       DATE_FMT is one of: YMDH YMD YM Y MDYH MDY MY" \
+                    "                           DMYH DMY YJH YJ JY"
+      ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for rewuired variables
+  my_FPFX="${fpfx}${var}"
+  my_LPFX="${lpfx}${var}"
+
+  if [ -z "${my_FPFX:-}" ] || [ -z "${my_LPFX:-}" ] || [ -z "${dirLIST:-}" ]; then
+    procError "Need to specify the variable name and/or file prefix" \
+              "and/or link prefix and the directory list to search." \
+              "Supplied:" \
+              "    Var. Name = ${var:-UNDEF}" \
+              "  File Prefix = ${fpfx:-UNDEF}" \
+              "  Link Prefix = ${lpfx:-UNDEF}" \
+              "    Dir. List = ${dirLIST:-UNDEF}"
+  fi
+  # -----
+
+
+  if [ -n "${my_DATE:+1}" ]; then
+    tmp_STR="$( getDate --date="${my_DATE}" --fmt='+%Y %m %d %H %M %S' )"
+      [ $? -ne 0 ] && procError "${tmp_STR}"
+
+    my_DATE=( ${tmp_STR} )
+    my_YR=${my_DATE[0]}
+    my_MO=${my_DATE[1]}
+    my_DA=${my_DATE[2]}
+    my_HR=${my_DATE[3]}
+    my_MN=${my_DATE[4]}
+    my_SC=${my_DATE[5]}
+
+    for ifmt in ${my_DFMT}
+    do
+      tmp_STR="$( getDateExpr ${ifmt} ${my_YR} ${my_MO} ${my_DA} ${my_HR} )"
+        [ $? -ne 0 ] && procError "${tmp_STR}"
+      my_DEXPR="${my_DEXPR} ${tmp_STR}"
+    done
+    my_DEXPR="$( strTrim "${my_DEXPR}" 2)"
+
+    if [ -n "${my_DEXPR:+1}" ]; then
+      my_FEXPR=( ${my_DEXPR} )
+      my_FEXPR=( "${my_FEXPR[@]/#/${ocnPFX}${my_FPFX}}" )
+      my_FEXPR=( "${my_FEXPR[@]/%/${ocnSFX}.${extA}}" )
+      my_FEXPR="${my_FEXPR[*]}"
+    fi
+  fi
+  my_FEXPR="$( strTrim "${my_FEXPR} ${ocnPFX}${my_FPFX}${ocnSFX}.${extA}" 2)"
+
+
+  # If file not found it issues an error and exits.
+  getModDataFile "${my_FEXPR}" "${dirLIST}"
+  nm_FILE="${foundFilePath%.${extA}}"
+  unset foundFilePath
+
+  # Check that both files *.[ab] exist in the same directory,
+  # exit on error.
+  if ! $( checkFILE -r "${nm_FILE}.${extB}" ); then
+    procError "Could not find the HYCOM data file:" \
+              "  File = ${nm_FILE}.${extB}"
+  fi
+
+  # If requested, make the directory in which we create
+  # the susequent links (if empty, the links are created
+  # in the current working directory).
+  my_LDIR="$( strTrim "${my_LDIR}" 2 )"
+  makeDIR "${my_LDIR}"
+
+  # Make links for both files *.[ab], exit on error.
+  for iext in ${extA} ${extB}
+  do
+    my_FILE="${nm_FILE}.${iext}"
+    my_FILELNK="${my_LDIR:+${my_LDIR}/}${my_LPFX}.${iext}"
+
+    linkFILE ${my_FILE} ${my_FILELNK}
+    if [ $? -eq 0 ]; then
+      ocnDATALINKS="${ocnDATALINKS} ${my_FILELNK}"
+    else
+      procError "Could not make the link of the HYCOM data file:" \
+                "  File = ${my_FILE}" \
+                "  Link = ${my_FILELNK}"
+    fi
+  done
+
+ export ocnDATALINKS
+
+ return 0
+}
+
+hyc_ForceFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_UPFX="hycfrc_"
+  local my_LDIR
+  local inp_file inp_dirs
+  local b_date e_date
+
+  local yrflag jerlv0 priver
+  local isotop vsigma veldf2 veldf4 thkdf2 thkdf4
+  local wndflg stroff flxflg ustflg empflg lwflag
+  local sstflg icmflg ticegr flxoff tidflg drgscl tidsal
+
+  local opt_all opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+
+  [ -n "${ocnFRCLINKS:+1}" ] && rm -f ${ocnFRCLINKS}
+  unset ocnFRCLINKS
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_WRF
+
+
+  inp_dirs="$( getDirList force )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Process the function options
+  opt_all=( conf inp lun prog )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -inp | --inp )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              inp_file="${opt_arg}"
+          fi
+        ;;
+      -start | --start )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              b_date="${opt_arg}"
+          fi
+        ;;
+      -end | --end )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              e_date="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the input file
+  if ! $( checkFILE -r "${inp_file}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_file:-UNDEF}"
+  fi
+
+  ### Check for the input dates
+  if [ -n "${b_date:+1}" ]; then
+    b_date="$( getDate --date="${b_date:-UNDEF}" --fmt='+%F %T' )"
+    if [ $? -ne 0 ]; then
+      procError "Wrong \"start\" date for the simulation." \
+                "  First Date = ${b_date:-UNDEF}"
+    fi
+  fi
+
+  if [ -n "${e_date:+1}" ]; then
+    e_date="$( getDate --date="${e_date:-UNDEF}" --fmt='+%F %T' )"
+    if [ $? -ne 0 ]; then
+      procError "Wrong \"end\" date for the simulation." \
+                "  Last Date = ${e_date:-UNDEF}"
+    fi
+  fi
+  # -----
+
+
+  # -----
+  # Get required flag values from the input file. These
+  # values are used later to make the links to the input data.
+  yrflag="$( hyc_GetBlkDatValue ${inp_file} yrflag "" )"
+    [ $? -ne 0 ] && procError "${yrflag}"
+
+  ### Get the flag value for water type jerlv0 >= 0
+  jerlv0="$( hyc_GetBlkDatValue ${inp_file} jerlv0 "" )"
+    [ $? -ne 0 ] && procError "${jerlv0}"
+
+  ### Get the flag value for rivers as a precipitation bogas priver = 0,1
+  priver="$( hyc_GetBlkDatValue ${inp_file} priver "" )"
+    [ $? -ne 0 ] && procError "${priver}"
+
+  ### Get the value for the shallowest depth for isopycnal layers (m),
+  ### isotop < 0 from file
+  isotop="$( hyc_GetBlkDatValue ${inp_file} isotop "" )"
+    [ $? -ne 0 ] && procError "${isotop}"
+
+  isotop="$( echo "(${isotop} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${isotop}" -eq 1 ]; then
+    isotop=-1
+  else
+    isotop=1
+  fi
+  
+  ### Get the flag value for spacially varying isopycnal target densities vsigma = 0,1
+  vsigma="$( hyc_GetBlkDatValue ${inp_file} vsigma "" )"
+    [ $? -ne 0 ] && procError "${vsigma}"
+
+  ### Get the value for the diffusion velocity (m/s) for Laplacian  momentum dissip.
+  ### veldf2 < 0 from file
+  veldf2="$( hyc_GetBlkDatValue ${inp_file} veldf2 "" )"
+    [ $? -ne 0 ] && procError "${veldf2}"
+
+  veldf2="$( echo "(${veldf2} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${veldf2}" -eq 1 ]; then
+    veldf2=-1
+  else
+    veldf2=1
+  fi
+
+  ### Get the value for the diffusion velocity (m/s) for biharmonic momentum dissip.
+  ### veldf4 < 0 from file
+  veldf4="$( hyc_GetBlkDatValue ${inp_file} veldf4 "" )"
+    [ $? -ne 0 ] && procError "${veldf4}"
+
+  veldf4="$( echo "(${veldf4} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${veldf4}" -eq 1 ]; then
+    veldf4=-1
+  else
+    veldf4=1
+  fi
+
+  ### Get the value for the diffusion velocity (m/s) for Laplacian  thickness diffus.
+  ### thkdf2 < 0 from file
+  thkdf2="$( hyc_GetBlkDatValue ${inp_file} thkdf2 "" )"
+    [ $? -ne 0 ] && procError "${thkdf2}"
+
+  thkdf2="$( echo "(${thkdf2} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${thkdf2}" -eq 1 ]; then
+    thkdf2=-1
+  else
+    thkdf2=1
+  fi
+
+  ### Get the value for the diffusion velocity (m/s) for biharmonic thickness diffus.
+  ### thkdf4 < 0 from file
+  thkdf4="$( hyc_GetBlkDatValue ${inp_file} thkdf4 "" )"
+    [ $? -ne 0 ] && procError "${thkdf4}"
+
+  thkdf4="$( echo "(${thkdf4} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${thkdf4}" -eq 1 ]; then
+    thkdf4=-1
+  else
+    thkdf4=1
+  fi
+
+
+  ####################
+  ### WIND FORCING
+  ####################
+  ### Get the flag value for wind forcing wndflg > 0
+  wndflg="$( hyc_GetBlkDatValue ${inp_file} wndflg "" )"
+    [ $? -ne 0 ] && procError "${wndflg}"
+
+  ### stroff is usualy used with wndflg=4
+  stroff="$( hyc_GetBlkDatValue ${inp_file} stroff "" )"
+    [ $? -ne 0 ] && procError "${stroff}"
+
+
+  ####################
+  ### TERMODYNAMIC FORCING
+  ####################
+  ### Get the flag value for thermodynamic forcing flxflg > 0
+  flxflg="$( hyc_GetBlkDatValue ${inp_file} flxflg "" )"
+    [ $? -ne 0 ] && procError "${flxflg}"
+
+  ### Get the flag value for ustar ustflg > 0
+  ustflg="$( hyc_GetBlkDatValue ${inp_file} ustflg "" )"
+    [ $? -ne 0 ] && procError "${ustflg}"
+
+  ### Get the flag value for precipitation empflg > 0
+  empflg="$( hyc_GetBlkDatValue ${inp_file} empflg "" )"
+    [ $? -ne 0 ] && procError "${empflg}"
+
+  ### Get the flag value for longwave (SST) lwflag > 0
+  lwflag="$( hyc_GetBlkDatValue ${inp_file} lwflag "" )"
+    [ $? -ne 0 ] && procError "${lwflag}"
+
+  ### Get the flag value for SST relaxation sstflg > 0
+  sstflg="$( hyc_GetBlkDatValue ${inp_file} sstflg "" )"
+    [ $? -ne 0 ] && procError "${sstflg}"
+
+  ### Get the flag value for ice mask icmflg > 0
+  icmflg="$( hyc_GetBlkDatValue ${inp_file} icmflg "" )"
+    [ $? -ne 0 ] && procError "${icmflg}"
+
+  ### Get the value ENLN: temp. grad. inside ice (deg/m) ticegr
+  ticegr="$( hyc_GetBlkDatValue ${inp_file} ticegr "" )"
+    [ $? -ne 0 ] && procError "${ticegr}"
+
+  ticegr="$( echo "(${ticegr} / 1.0) == 0" | bc -ql 2>/dev/null )"
+  if [ "${ticegr}" -eq 1 ]; then
+    ticegr=0
+  else
+    ticegr=1
+  fi
+
+  ### Get the flag value for net flux offset flxoff > 0
+  flxoff="$( hyc_GetBlkDatValue ${inp_file} flxoff "" )"
+    [ $? -ne 0 ] && procError "${flxoff}"
+
+
+  ####################
+  ### TIDES
+  ####################
+  ### Get the flag value for tidal forcing tidflg > 0
+  tidflg="$( hyc_GetBlkDatValue ${inp_file} tidflg "" )"
+    [ $? -ne 0 ] && procError "${tidflg}"
+
+  ### Get the value of scale factor for tidal drag drgscl
+  drgscl="$( hyc_GetBlkDatValue ${inp_file} drgscl "" )"
+    [ $? -ne 0 ] && procError "${drgscl}"
+
+  drgscl="$( echo "(${drgscl} / 1.0) == 0" | bc -ql 2>/dev/null )"
+  if [ "${drgscl}" -eq 1 ]; then
+    drgscl=0
+  else
+    drgscl=1
+  fi
+
+  ### Get the value of scalar self attraction and loading factor tidsal
+  tidsal="$( hyc_GetBlkDatValue ${inp_file} tidsal "" )"
+    [ $? -ne 0 ] && procError "${tidsal}"
+
+  tidsal="$( echo "(${tidsal} / 1.0) < 0" | bc -ql 2>/dev/null )"
+  if [ "${tidsal}" -eq 1 ]; then
+    tidsal=-1
+  else
+    tidsal=1
+  fi
+  # -----
+
+
+  # -----
+  # If WRF is not used, then the ocean is to be forced from external
+  # sources. The required data are to be furnished during
+  # the pre-processing stage.
+  # For HYCOM the possible requirements are:
+  # wndspd.{ab} wndewd.{ab} wndnwd.{ab} tauewd.{ab} taunwd.{ab} ofstrs.{ab}
+  # airtmp.{ab} vapmix.{ab} radflx.{ab} shwflx.{ab} precip.{ab}
+  # surtmp.{ab} seatmp.{ab} offlux.{ab}
+  if [ -z "${USE_WRF:-}" ]; then
+
+    if [ ${yrflag} -lt 2 ]; then
+
+      ### For wind forcing wndflg > 0
+      if [ ${wndflg} -gt 0 ]; then
+        if [ ${wndflg} -ne 4 ]; then
+          hyc_GetDataLink --var="tauewd" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YMDH"
+          hyc_GetDataLink --var="taunwd" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        else # wndflg = 4
+          hyc_GetDataLink --var="wndewd" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+          hyc_GetDataLink --var="wndnwd" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        fi # wndflg != 4
+
+        if [ ${stroff} -gt 0 ]; then
+          hyc_GetDataLink --var="ofstrs" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        fi # stroff > 0
+      fi # wndflg > 0
+
+      ### For thermodynamic forcing flxflg > 0
+      if [ ${flxflg} -gt 0 ]; then
+        if [ ${ustflg} -eq 3 ]; then
+          hyc_GetDataLink --var="ustar" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        fi # ustflg = 3
+
+        if [ ${wndflg} -lt 3 ]; then
+          hyc_GetDataLink --var="wndspd" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        fi # wndflg < 3
+
+        hyc_GetDataLink --var="airtmp" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        hyc_GetDataLink --var="vapmix" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+
+        if [ ${empflg} -gt 0 ]; then
+          hyc_GetDataLink --var="precip" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                          --ldir="${my_LDIR}" \
+                          --dirs="${inp_dirs}" \
+                          --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        fi # empflg > 0
+
+        hyc_GetDataLink --var="radflx" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        hyc_GetDataLink --var="shwflx" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # flxflg > 0
+
+      if [ ${lwflag} -eq 2 -o \
+           ${sstflg} -eq 2 -o \
+           ${icmflg} -eq 2 -o \
+           ${ticegr} -eq 0 ]; then
+        hyc_GetDataLink --var="surtmp" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # lwflag = 2, sstflg = 2, icmflg = 2, ticegr = 0
+
+      if [ ${sstflg} -eq 3 ]; then
+        hyc_GetDataLink --var="seatmp" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # sstflg = 3
+
+      if [ ${flxoff} -gt 0 ]; then
+        hyc_GetDataLink --var="offlux" \
+                          --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # flxoff > 0
+
+    else # yrflag < 2
+
+      if [ ${wndflg} -ne 4 ]; then
+        hyc_GetDataLink --var="tauewd" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        hyc_GetDataLink --var="taunwd" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      else # wndflg = 4
+        hyc_GetDataLink --var="wndewd" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+        hyc_GetDataLink --var="wndnwd" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # wndflg != 4
+
+      if [ ${stroff} -gt 0 ]; then
+        hyc_GetDataLink --var="ofstrs" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # stroff > 0
+
+      if [ ${ustflg} -eq 3 ]; then
+        hyc_GetDataLink --var="ustar" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # ustflg = 3
+
+      if [ ${wndflg} -lt 3 ]; then
+        hyc_GetDataLink --var="wndspd" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # wndflg < 3
+
+      hyc_GetDataLink --var="airtmp" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      hyc_GetDataLink --var="vapmix" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+
+      hyc_GetDataLink --var="precip" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+
+      hyc_GetDataLink --var="radflx" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      hyc_GetDataLink --var="shwflx" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+
+      if [ ${lwflag} -eq 2 -o \
+           ${sstflg} -eq 2 -o \
+           ${icmflg} -eq 2 -o \
+           ${ticegr} -eq 0 ]; then
+        hyc_GetDataLink --var="surtmp" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # lwflag = 2, sstflg = 2, icmflg = 2, ticegr = 0
+
+      if [ ${sstflg} -eq 3 ]; then
+        hyc_GetDataLink --var="seatmp" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # sstflg = 3
+
+      if [ ${flxoff} -gt 0 ]; then
+        hyc_GetDataLink --var="offlux" \
+                        --fpfx="${my_UPFX}" --lpfx="forcing." \
+                        --ldir="${my_LDIR}" \
+                        --dirs="${inp_dirs}" \
+                        --date="${b_date:-${e_date}}" --dfmt="YM Y"
+      fi # flxoff > 0
+
+    fi # yrflag >= 2
+
+  fi # USE_WRF=no
+  # -----
+
+
+  # -----
+  ### For initial jerlov water type (1 to 5; 0 to use kpar)
+  if [ ${jerlv0} -eq 0 ]; then
+    if [ ${flxflg} -gt 0 ]; then
+      hyc_GetDataLink --var="kpar" \
+                      --fpfx="${my_UPFX}" --lpfx="forcing." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi # flxflg > 0
+  fi # jerlv0 = 0
+
+  ### For rivers as a precipitation bogas
+  if [ ${priver} -eq 1 ]; then
+    hyc_GetDataLink --var="rivers" \
+                    --fpfx="${my_UPFX}" --lpfx="forcing." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # priver = 1
+
+  ### For scale factor for tidal drag tidsal
+  if [ ${tidflg} -gt 0 -a ${tidsal} -lt 0 ]; then
+    hyc_GetDataLink --var="sal" \
+                    --fpfx="${my_UPFX}" --lpfx="tidal." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # tidflg > 1, tidsal < 0
+
+  ### For scale factor for tidal drag drgscl
+  if [ ${drgscl} -ne 0 ]; then
+    hyc_GetDataLink --var="rh" \
+                    --fpfx="${my_UPFX}" --lpfx="tidal." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # drgscl ne 0
+
+  ### For shallowest depth for isopycnal layers, <0 from file isotop
+  if [ ${isotop} -eq -1 ]; then
+    hyc_GetDataLink --var="top" \
+                    --fpfx="${my_UPFX}" --lpfx="iso." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # isotop < 0
+
+  ### For spacially varying isopycnal target densities vsigma
+  if [ ${vsigma} -eq 1 ]; then
+    hyc_GetDataLink --var="sigma" \
+                    --fpfx="${my_UPFX}" --lpfx="iso." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # vsigma = 1
+
+  ### For diffusion velocity (m/s) for Laplacian  momentum dissip. veldf2
+  if [ ${veldf2} -eq -1 ]; then
+    hyc_GetDataLink --var="veldf2" \
+                    --fpfx="${my_UPFX}" --lpfx="" \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # veldf2 < 0
+
+  ### For diffusion velocity (m/s) for biharmonic momentum dissip. veldf4
+  if [ ${veldf4} -eq -1 ]; then
+    hyc_GetDataLink --var="veldf4"  \
+                    --fpfx="${my_UPFX}" --lpfx="" \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # veldf4 < 0
+
+  ### For diffusion velocity (m/s) for biharmonic thickness diffus. thkdf4
+  if [ ${thkdf4} -eq -1 ]; then
+    hyc_GetDataLink --var="thkdf4"  \
+                    --fpfx="${my_UPFX}" --lpfx="" \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # thkdf4 < 0
+  # -----
+
+
+ export ocnFRCLINKS="${ocnDATALINKS}"
+
+ return 0
+}
+
+hyc_RelaxFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_UPFX="hycrlx_"
+  local my_LDIR
+  local inp_file inp_dirs
+  local b_date e_date
+
+  local yrflag iniflg lwflag
+  local sshflg sssflg sstflg relax trcrlx ntracr
+
+  local -i srelax=0 trelax=0 relaxt=0 relaxf=0 relaxs=0
+
+  local opt_all opt_opt opt_arg
+  local ocnDATALINKS
+  local -i STATUS=0
+
+
+  [ -n "${ocnRLXLINKS:+1}" ] && rm -f ${ocnRLXLINKS}
+  unset ocnRLXLINKS
+
+
+  inp_dirs="$( getDirList relax )"
+  if [ $? -ne 0 ]; then
+    procError "Failed to get a list of input directories." \
+              "  Dir List = ${inp_dirs:-UNDEF}"
+  fi
+
+
+  # -----
+  # Process the function options
+  opt_all=( inp start end )
+  opt_all=":$( echo "${opt_all[@]/#/-} ${opt_all[@]/#/--}" | sed 's/ /:/g' ):"
+
+  unset __OPTION_LIST
+  while test $# -gt 0; do
+    case "${1}" in
+      -[^-]*=* | --[^-]*=* )
+        opt_opt="$( toLOWER "$( echo "${1}" | sed 's/=.*//' )" )"
+        opt_arg="$( strTrim "$( echo "${1}" | sed 's/.*=//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      -[^-]* | --[^-]* )
+        opt_opt="$( toLOWER "${1}" )"
+        opt_arg="$( strTrim "$( echo "${2}" | sed 's/=.*//' )" 2 )"
+        [ "$( echo "${opt_all}" | egrep -o ":${opt_arg}:" )" ] && \
+          opt_arg=
+        ;;
+      *)
+        opt_opt= 
+        opt_arg=
+        ;;
+    esac
+
+    case "${opt_opt}" in
+      -inp | --inp )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              inp_file="${opt_arg}"
+          fi
+        ;;
+      -start | --start )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              b_date="${opt_arg}"
+          fi
+        ;;
+      -end | --end )
+          checkFuncOpt "$( echo "${opt_opt}" | sed 's/^[-]*//' )"
+          if [ "X${opt_arg}" != "X" ]; then
+              e_date="${opt_arg}"
+          fi
+        ;;
+      *) ;; # DEFAULT
+    esac
+    shift
+    opt_opt= 
+    opt_arg=
+  done
+  unset __OPTION_LIST
+  # -----
+
+
+  # -----
+  # Check for the user inputs and the required programs.
+  ### Check for the input file
+  if ! $( checkFILE -r "${inp_file}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_file:-UNDEF}"
+  fi
+
+  ### Check for the input dates
+  if [ -n "${b_date:+1}" ]; then
+    b_date=( $( getDate --date="${b_date:-UNDEF}" --fmt='+%F %T' ) )
+    if [ $? -ne 0 ]; then
+      procError "Wrong \"start\" date for the simulation." \
+                "  First Date = ${b_date:-UNDEF}"
+    fi
+  fi
+
+  if [ -n "${e_date:+1}" ]; then
+    e_date=$( getDate --date="${e_date:-UNDEF}" --fmt='+%F %T' )
+    if [ $? -ne 0 ]; then
+      procError "Wrong \"end\" date for the simulation." \
+                "  Last Date = ${e_date:-UNDEF}"
+    fi
+  fi
+  # -----
+
+
+  # -----
+  # Get required flag values from the input file. These
+  # values are used later to make the links to the input data.
+  yrflag="$( hyc_GetBlkDatValue ${inp_file} yrflag "" )"
+    [ $? -ne 0 ] && procError "${yrflag}"
+
+  ### Get the flag value for initial state flag iniflg >= 0
+  iniflg="$( hyc_GetBlkDatValue ${inp_file} iniflg "" )"
+    [ $? -ne 0 ] && procError "${iniflg}"
+
+  ### Get the flag value for longwave (SST) lwflag > 0
+  lwflag="$( hyc_GetBlkDatValue ${inp_file} lwflag "" )"
+    [ $? -ne 0 ] && procError "${lwflag}"
+
+  ### Get the flag value for diagnostic SSH flag sshflg = 0,1
+  sshflg="$( hyc_GetBlkDatValue ${inp_file} sshflg "" )"
+    [ $? -ne 0 ] && procError "${sshflg}"
+
+  ### Get the flag value for SSS relaxation flag sssflg (-1 -- 1)
+  sssflg="$( hyc_GetBlkDatValue ${inp_file} sssflg "" )"
+    [ $? -ne 0 ] && procError "${sssflg}"
+
+  ### Get the flag value for SSS relaxation flag sstflg
+  sstflg="$( hyc_GetBlkDatValue ${inp_file} sstflg "" )"
+    [ $? -ne 0 ] && procError "${sstflg}"
+
+  ### Get the flag value to activate lateral boundary nudging relax
+  relax="$( hyc_GetBlkDatValue ${inp_file} relax "" )"
+    [ $? -ne 0 ] && procError "${relax}"
+
+  ### Get the flag value to activate lat. bound. tracer nudging trcrlx
+  trcrlx="$( hyc_GetBlkDatValue ${inp_file} trcrlx "" )"
+    [ $? -ne 0 ] && procError "${trcrlx}"
+
+  ### Get the flag value for SSS relaxation flag ntracr
+  ntracr="$( hyc_GetBlkDatValue ${inp_file} ntracr "" )"
+    [ $? -ne 0 ] && procError "${ntracr}"
+
+  [ "${sssflg}" -eq 1 ] || \
+    [ "${sssflg}" -eq -1 ] && \
+  srelax=1
+
+  [ "${sstflg}" -eq 1 ] && trelax=1
+
+  [ "${ntracr}" -ne 0 ] && \
+    ( [ "${trcrlx}" -gt 0 ] || \
+      ( [ "${ntracr}" -lt 0 ] && [ "${iniflg}" -eq 2 ] ) ) && \
+  relaxt=1
+
+  [ ${relax} -gt 0 ] || [ ${srelax} -gt 0 ] || \
+    [ ${trelax} -gt 1 ] || [ ${lwflag} -eq 1 ] || \
+    [ ${relaxt} -gt 0 ] && \
+  relaxf=1
+
+  [ ${relax} -le 0 ] && \
+    [ ${relaxf} -gt 0 ] && \
+  relaxs=1
+  # -----
+
+
+  # -----
+  ### For diagnostic SSH flag sshflg
+  if [ ${sshflg} -gt 0 ]; then
+    hyc_GetDataLink --var="ssh" \
+                    --fpfx="${my_UPFX}" --lpfx="relax." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+  fi # sshflg > 0
+
+  if [ ${relaxf} -gt 0 ]; then
+    ### For SSS relaxation flag sssflg
+    if [ ${sssflg} -eq -1 ]; then
+      hyc_GetDataLink --var="sssrmx" \
+                      --fpfx="${my_UPFX}" --lpfx="relax." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi # sssflg = -1
+
+    if [ ${relax} -gt 0 ]; then
+      hyc_GetDataLink --var="rmu" \
+                      --fpfx="${my_UPFX}" --lpfx="relax." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi
+
+    if [ ${trcrlx} -gt 0 ]; then
+      hyc_GetDataLink --var="rmutr" \
+                      --fpfx="${my_UPFX}" --lpfx="relax." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi
+
+    hyc_GetDataLink --var="temp" \
+                    --fpfx="${my_UPFX}" --lpfx="relax." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    hyc_GetDataLink --var="saln" \
+                    --fpfx="${my_UPFX}" --lpfx="relax." \
+                    --ldir="${my_LDIR}" \
+                    --dirs="${inp_dirs}" \
+                    --date="${b_date:-${e_date}}" --dfmt="YM Y"
+
+    if [ ${relaxt} -gt 0 ] || [ ${relaxs} -le 0 ]; then
+      hyc_GetDataLink --var="intf" \
+                      --fpfx="${my_UPFX}" --lpfx="relax." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi
+
+    if [ ${relaxt} -gt 0 ]; then
+      hyc_GetDataLink --var="trcr" \
+                      --fpfx="${my_UPFX}" --lpfx="relax." \
+                      --ldir="${my_LDIR}" \
+                      --dirs="${inp_dirs}" \
+                      --date="${b_date:-${e_date}}" --dfmt="YM Y"
+    fi
+  fi
+  # -----
+
+
+ export ocnRLXLINKS="${ocnDATALINKS}"
+
+ return 0
+}
+
+# -------------------------------------------------------
+# Check_HYCOMConfig()
+# Usage:     Check_HYCOMConfig inp_file
+#
+# Parameters:
+# inp_file : The name of the HYCOM input configuration file. This function
+#            will search for a file named "inp_file-tmpl" (inp_tmpl="inp_file-tmpl"),
+#            examine if "inp_tmpl" is a valid HYCOM configuration file and
+#            subsequently copy this file: inp_tmpl -> inp_file.
+#            In addition, this function alters the "inp_file" by modyfing
+#            the values of certain variables (see code below) that need to
+#            be modified just once.
+#
+# Returns : 0 (success), >0 (failure)
+#           If HYCOM is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+#
+# Echoes  : None
+#
+# Imports : Imported parameters from the environment are:
+#           USE_HYCOM  = Denotes if HYCOM is active (Null/Empty value = inactive).
+#           ocnDOMS    = The total number of the domains defined for HYCOM
+#                        (e.g., nests, refined grids, always 1).
+#                        This variable is not used.
+#           ocnDT      = The baroclinic time step (seconds). Within this function
+#                        ocnDT is used to calculate the baroclinic time step
+#                        in days. If it is not set, its value is read from
+#                        "blkdat.input" in days and converted back to seconds.
+#           ocnNDTFAST = The number of barotropic time steps (integer). Within
+#                        this function ocnNDTFAST and ocnDT are used to calculate
+#                        the barotropic time step in days.
+#                        If it is not set, the barotropic time step is read
+#                        from "blkdat.input" in days and converted back to an
+#                        integer: baroclinic time step / barotropic time step.
+#           ocnHFRM    = The time length to write each history file.
+#                        If it is not set, this functions tries to use "his_freq".
+#                        If both ocnHFRM and his_freq are unset, its value
+#                        is obtain from "blkdat.input" (variable diagfq, days)
+#                        and converted back to seconds. The definition of ocnHFRM
+#                        is different when the ocean model is ROMS.
+#           ocnNPROC_X = The number of tiles to be constructed in the x-direction
+#                        of the domain (#of cpus in x-direction).
+#           ocnNPROC_Y = The number of tiles to be constructed in the y-direction
+#                        of the domain (#of cpus in y-direction).
+#                        Total number of CPUs = ocnNPROC_X * ocnNPROC_Y
+#                        They can be set either in the calling script or in the
+#                        HYCOM configuration file.
+#
+# Exports : Exported back to the environment the following parameters:
+#             ocnFLG ocnINP ocnDOMS ocnDT ocnNDTFAST ocnHFRM
+#             ocnNPROC_X ocnNPROC_Y ocnNODES ModelCPUS
+#           ocnFLG     = 0/1, 1 if HYCOM is ready for use
+#           ocnINP     = The name of the modified input file (inp_file)
+#           ocnNODES   = The total number of the CPUs reserved for HYCOM
+#           ModelCPUS  = The total number of CPUs to be used by the modeling system
+#                        (in a stand-alone HYCOM configuration).
+#
+# Modifies : The relevant variables that are modified in the HYCOM
+#            input configuration file are:
+#            baclin batrop diagfq dsurfq
+#
+# Check_HYCOMConfig: Checks the validity and perform certain modifications
+#                   on a HYCOM input configuration file. It also performs
+#                   certain preliminary tasks (see code below).
+# -------------------------------------------------------
+Check_HYCOMConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local inp_tmpl inp_file inp_line inp_var
+
+  local var_VAL my_VAL chk_VAL
+  local nproc_x nproc_y
+
+
+  ########## Global variables
+  unset ocnINP
+  export ocnNODES=1
+  export ocnFLG=0
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_HYCOM
+
+  [ -z "${USE_HYCOM:-}" ] && return 0
+
+  inp_file="$( echo "${1:-UNDEF}" | sed -e 's/[[:space:]]//g' )"
+  inp_tmpl="${inp_file}-tmpl"
+
+  if ! $( checkFILE -r "${inp_tmpl}" ); then
+    procError "Could not find the HYCOM input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+
+  # ----- is this a HYCOM blkdat.input file?
+  if [ "X$( hyc_GetBlkDatLine ${inp_tmpl} baclin )" != "X" ] && \
+     [ "X$( hyc_GetBlkDatLine ${inp_tmpl} nsigma )" != "X" ] && \
+     [ "X$( hyc_GetBlkDatLine ${inp_tmpl} dp0k )"   != "X" ]; then
+
+    [ -f ${inp_file} ] && rm -f ${inp_file}
+    cp -f ${inp_tmpl} ${inp_file}
+
+    export ocnFLG=1
+    export ocnINP="${inp_file}"
+  else
+    procError "The supplied input file is not a valid HYCOM input file:" \
+              "  File = ${inp_tmpl}"
+  fi
+  # -----
+
+
+  # -----
+  # Check if the user requested a number domains to be used
+  # other than 1. In HYCOM this variable is not used, the
+  # number of domains is 1.
+  export ocnDOMS=1
+  # -----
+
+
+  # -----
+  # Check if the user requested a baroclinic time step to be used
+  # and replace its value into the input file. If this is not the
+  # case, read the input configuration file and get the baroclinic
+  # time step. Export its value to the environment.
+  # baroclinic time step (seconds), int. divisor of 86400
+  inp_var=baclin
+  if [ -n "${ocnDT:+1}" ]; then
+    my_VAL="$( echo "${ocnDT}" | \
+               sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+
+    if ! $( isPosNumber "${my_VAL}" ) ; then
+      procError "Ocean time step should always be positive:" \
+                "  ocnDT = ${ocnDT:-UNDEF}" \
+                "This value cannot be used in the current calculations." \
+                "Please modify the value of this variable (or leave it empty)."
+    fi
+
+    inp_line="$( hyc_GetBlkDatLine ${inp_file} "${inp_var}" )"
+    hyc_PutBlkDatLine ${inp_file} "${inp_line}" "${my_VAL}"  "%6.1f    "
+  fi
+
+  # Read the input file and get the final value for the
+  # requested variable. Export the final ocnDT value.
+  var_VAL="$( hyc_GetBlkDatValue ${inp_file} "${inp_var}" "" )"
+    [ $? -ne 0 ] && procError "${var_VAL}"
+
+  my_VAL="$( echo "${var_VAL}" | awk '{printf  "%0.f", $1}' )"
+
+  export ocnDT=${my_VAL}
+  # -----
+
+
+  # -----
+  # Check if the user requested a number of barotropic time steps
+  # to be used. Calculate the barotropic time step and replace its
+  # value into the input file. If this is not the case, read the
+  # input configuration file and get the barotropic time step.
+  # Export its value to the environment.
+  # barotropic time step (seconds), int. div. of baclin/2
+  inp_var=batrop
+  if [ -n "${ocnNDTFAST:+1}" ]; then
+    my_VAL="$( echo "${ocnNDTFAST}" | \
+               sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+    my_VAL="$( getPosInteger "${my_VAL}" )"
+
+    if [ "${my_VAL:-0}" -lt 2 ]; then
+      procError "The number of barotropic time steps should always be positive" \
+                "and greater than 2:" \
+                "  ocnNDTFAST = ${ocnNDTFAST:-UNDEF}" \
+                "This value cannot be used in the current calculations." \
+                "Please modify the value of this variable (or leave it empty)."
+    fi
+
+    # Calculate the barotropic time step and replace its value
+    # into the input file.
+    my_VAL="$(echo "scale=10; ${ocnDT} / ${my_VAL}" | bc -ql 2>/dev/null)"
+    inp_line="$( hyc_GetBlkDatLine ${inp_file} "${inp_var}" )"
+    hyc_PutBlkDatLine ${inp_file} "${inp_line}" "${my_VAL}"  "%6.1f    "
+  fi
+
+  # Read the input file and get the final value for the
+  # requested variable. Export the final ocnNDTFAST value.
+  var_VAL="$( hyc_GetBlkDatValue ${inp_file} "${inp_var}" "" )"
+    [ $? -ne 0 ] && procError "${var_VAL}"
+  my_VAL="$( echo "${ocnDT}" | \
+             awk -v var="${var_VAL}" '{printf "%0.f", $1 / var}' )"
+
+  export ocnNDTFAST=${my_VAL}
+
+  chk_VAL="$(echo "${ocnDT} != (${my_VAL} * ${var_VAL})" | bc -ql 2>/dev/null)"
+  if [ "${chk_VAL:-1}" -eq 1 ]; then
+    procError "The barotropic time step is not an integral divisor of baclin/2:" \
+              "       ocnDT = ${ocnDT:-UNDEF}" \
+              "  ocnNDTFAST = ${var_VAL:-UNDEF}" \
+              "  ocnNDTFAST = ${ocnNDTFAST:-UNDEF}" \
+              "These values cannot be used in the current calculations." \
+              "Please modify the values of ocnDT/ocnNDTFAST accordingly," \
+              "or leave them empty and modify the variables baclin/batrop" \
+              "in the HYCOM input configuration file instead."
+  fi
+  # -----
+
+
+  # -----
+  # Check if the user requested a number of x/y tiles(cpus) to be used
+  # for the current calculation.
+  if [ -n "${ocnNPROC_X:+1}" ]; then
+    my_VAL="$( echo "${ocnNPROC_X}" | \
+               sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+    my_VAL="$( getPosInteger "${my_VAL}" )"
+
+    if [ "${my_VAL:-0}" -lt 1 ]; then
+      procError "The number of tiles in the X-direction should be" \
+                "greater or equal to 1:" \
+                "  ocnNPROC_X = ${ocnNPROC_X:-UNDEF}" \
+                "This value cannot be used in the current calculations." \
+                "Please modify the value of this variable (or leave it empty)."
+    fi
+    nproc_x=${my_VAL}
+  fi
+
+  if [ -n "${ocnNPROC_Y:+1}" ]; then
+    my_VAL="$( echo "${ocnNPROC_Y}" | \
+               sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+    my_VAL="$( getPosInteger "${my_VAL}" )"
+
+    if [ "${my_VAL:-0}" -lt 1 ]; then
+      procError "The number of tiles in the Y-direction should be" \
+                "greater or equal to 1:" \
+                "  ocnNPROC_Y = ${ocnNPROC_Y:-UNDEF}" \
+                "This value cannot be used in the current calculations." \
+                "Please modify the value of this variable (or leave it empty)."
+    fi
+    nproc_y=${my_VAL}
+  fi
+
+  export ocnNPROC_X=${nproc_x:-1}
+  export ocnNPROC_Y=${nproc_y:-1}
+
+  export ocnNODES=$(( ${ocnNPROC_X} * ${ocnNPROC_Y} ))
+  export ModelCPUS=${ocnNODES}
+  # -----
+
+
+  # -----
+  # Check if the user requested to write model outputs at specific
+  # time intervals. Calculate the appropriate time intervals in days
+  # and write this value into the input file. If this is not the case,
+  # read the input configuration file and get the time interval.
+  # Export this value to the environment.
+  # 'dsurfq' = number of days between model diagnostics at the surface
+  # 'diagfq' = number of days between model diagnostics (-ve & at end)
+  #
+  # Time between writing fields (seconds), converted to days below.
+  # "ocnHFRM" always has priority over "his_freq", in HYCOM each output
+  # file contains data for just one time record.
+  ocnHFRM=${ocnHFRM:-${his_freq}}
+  if [ -n "${ocnHFRM:+1}" ]; then
+    my_VAL="$( echo "${ocnHFRM}" | \
+               sed -e 's/[=;:,_\{\}\\[:space:]]//g' | awk '{print $1}' )"
+    my_VAL="$( getPosInteger "${my_VAL}" )"
+
+    if [ "${my_VAL:--1}" -lt 0 ]; then
+      procError "The time interval to write diagnostics can not be" \
+                "less than zero:" \
+                "  his_freq = ${his_freq:-UNDEF}" \
+                "   ocnHFRM = ${ocnHFRM:-UNDEF}" \
+                "This value cannot be used in the current calculations." \
+                "Please modify the value of the variable(s) ocnHFRM/his_freq" \
+                "(or leave them empty). ocnHFRM get priority over his_freq."
+    fi
+
+    my_VAL="$(echo "scale=10; ${my_VAL} / 86400.0" | bc -ql 2>/dev/null)"
+
+    inp_var=diagfq
+      inp_line="$( hyc_GetBlkDatLine ${inp_file} "${inp_var}" )"
+      hyc_PutBlkDatLine ${inp_file} "${inp_line}" "${my_VAL}"  "%.8f"
+
+    inp_var=dsurfq
+      inp_line="$( hyc_GetBlkDatLine ${inp_file} "${inp_var}" )"
+      hyc_PutBlkDatLine ${inp_file} "${inp_line}" "${my_VAL}"  "%.8f"
+  fi
+
+  # Read the input file and get the final value for the
+  # requested variable. Export the final ocnHFRM value.
+  inp_var=diagfq
+    var_VAL="$( hyc_GetBlkDatValue ${inp_file} "${inp_var}" "" )"
+      [ $? -ne 0 ] && procError "${var_VAL}"
+  my_VAL="$( echo "${var_VAL}" | awk '{printf "%0.f", $1 * 86400.0}' )"
+
+  export ocnHFRM=${my_VAL}
+  # -----
+
+
+  # Check for the bathymetry files and make the appropriate links
+  # in the current directory. These files are required for further
+  # model calculations. If any file is not found this function
+  # exits.
+  hyc_TopoFiles
+
+  # Create the patch.input file in the current directory.
+  # If this fails then this function exits.
+  hyc_MakePatch --xtile=${ocnNPROC_X} --ytile=${ocnNPROC_Y}
+
+  # Create the ports*.input files in the current directory.
+  # If this fails then this function exits.
+  hyc_MakePorts --inp="${ocnINP}"
+
+  # Create the tracer.input files in the current directory.
+  # If this fails then this function exits.
+  hyc_MakeTracers --inp="${ocnINP}"
+
+
+  export ocnGRDLINKS
+
+  return 0
+}
+
+# -------------------------------------------------------
+# Modify_HYCOMConfig()
+# Usage:     Modify_HYCOMConfig
+# Parameters: NONE (the only feed is from the environment)
+#
+# Returns : 0 (success), >0 (failure)
+#           If HYCOM is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Significant imported parameters from the environment are:
+#           USE_HYCOM = Denotes if HYCOM is active (Null/Empty value = inactive).
+#             USE_FRC = Denotes if HYCOM is using extra forcing files
+#                       (Null/Empty value = inactive).
+#            DATA_DIR = The directory where the input data are stored
+#                       (Default: current directory).
+#              ocnINP = The name of the HYCOM input configuration file
+#                       (Exported from Check_HYCOMConfig).
+#             ocnDOMS = The total number of the domains defined for HYCOM
+#                       (e.g., nests, refined grids, default 1).
+#               ocnDT = The time-step size (baroclinic in 3D, barotropic in 2D),
+#                       one to unlimited entries
+#                       (Default: 600 (seconds)).
+#          ocnNDTFAST = The number of barotropic time-steps to reach "ocnDT",
+#                       one to unlimited entries
+#                       (Default: 30 (dimensionless)).
+#             ocnHFRM = The time lengths to write in each history file for each nest
+#                       that is, write records every XXX seconds
+#                       ocnHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                       (Default: 86400 (seconds), 1-day).
+#            firstYR firstMO firstDA firstHR firstMN firstSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       beginning of the current simulation segment.
+#             lastYR  lastMO  lastDA  lastHR  lastMN  lastSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       end of the current simulation segment.
+# Exports : Exported parameters to the environment are:
+#             ocnLINKFILES
+#        ocnLINKFILES = The soft links to the input data created by calling
+#                       this function.
+# Modifies : Variables that are modified in the HYCOM input configuration file are:
+#
+# Modify_HYCOMConfig: Dynamically modifies the HYCOM input configuration file created
+#                     from a previous call of Check_HYCOMConfig.
+# -------------------------------------------------------
+Modify_HYCOMConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local b_date b_day b_jul
+  local b_YR b_MO b_DA b_HR b_MN b_SC
+  local e_date e_day e_jul
+  local e_YR e_MO e_DA e_HR e_MN e_SC
+
+  local -i STATUS=0
+
+  local cwd="$( pwd )"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_HYCOM
+
+  [ -z "${USE_HYCOM:-}" ] && return 0
+
+  # ----- is this a HYCOM blkdat.input file?
+  if ! $( checkFILE -r "${ocnINP}" ); then
+    procError "Couldn't locate the HYCOM input file." \
+              "Need to define USE_HYCOM=yes" \
+              "and the name HYCOM input configuration file." \
+              "  USE_HYCOM = ${USE_HYCOM:-UNDEF}" \
+              "    ocnINP  = ${ocnINP:-UNDEF}"
+  else
+    if [ "X$( hyc_GetBlkDatLine ${inp_tmpl} baclin )" != "X" ] && \
+       [ "X$( hyc_GetBlkDatLine ${inp_tmpl} nsigma )" != "X" ] && \
+       [ "X$( hyc_GetBlkDatLine ${inp_tmpl} dp0k )"   != "X" ]; then
+
+      procError "The supplied input file is not a valid HYCOM input file:" \
+                "  File = ${ocnINP}"
+    fi
+  fi
+  # -----
+
+
+  # -----
+  b_date="${firstYR}-${firstMO}-${firstDA} ${firstHR}:${firstMN}:${firstSC}"
+  e_date="${lastYR}-${lastMO}-${lastDA} ${lastHR}:${lastMN}:${lastSC}"
+
+  b_date="$( getDate --date="${b_date}" --fmt='+%F %T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"start\" date for the simulation." \
+              "  First Date = ${b_date}"
+  fi
+
+  e_date="$( getDate --date="${e_date}" --fmt='+%F %T' )"
+  if [ $? -ne 0 ]; then
+    procError "Wrong \"end\" date for the simulation." \
+              "  Last Date = ${e_date}"
+  fi
+
+  b_jul=$( getDate --date="${b_date}" --fmt='+%s' )
+  e_jul=$( getDate --date="${e_date}" --fmt='+%s' )
+  if [ ${e_jul} -lt ${b_jul} ]; then
+    procError "Wrong \"end\" date for the simulation: SimEnd >= SimBeg." \
+              "  First Date = ${b_date}" \
+              "   Last Date = ${e_date}"
+  fi
+  # -----
+
+
+  # -----
+  # HYCOM limits file.
+  hyc_MakeLimits --start="${b_date}" --end="${e_date}" \
+                 --ini=0
+
+  # -----
+  # HYCOM init/restart files.
+  hyc_InitFiles --start="${b_date}" \
+                --ini=${FORCE_INI:-0}
+
+  # -----
+  # HYCOM boundary/nest files.
+  hyc_BdryFiles --inp="${ocnINP}" \
+                --start="${b_date}" --end="${e_date}" \
+                --nstoff=0
+
+  # -----
+  # HYCOM other forcing files.
+  hyc_ForceFiles --inp="${ocnINP}" \
+                 --start="${b_date}" --end="${e_date}"
+
+  # -----
+  # HYCOM relaxation files.
+  hyc_RelaxFiles --inp="${ocnINP}" \
+                 --start="${b_date}" --end="${e_date}"
+
+
+  #export ocnLINKFILES="${ocnGRDLINKS} ${ocnINILINKS} ${ocnBRYLINKS} \
+  #                     ${ocnFRCLINKS} ${ocnRLXLINKS}"
+  export ocnLINKFILES="${ocnINILINKS} ${ocnBRYLINKS} \
+                       ${ocnFRCLINKS} ${ocnRLXLINKS}"
+
+  return 0
+}
+
+Move_HYCOMFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local nm_prog my_prog
+
+  local my_UPFX arr arrlen
+  local my_files f_inp f_out f_out_base
+  local f_pfx f_sfx f_date
+  local ilst date day
+  local yr mo da hr mn sc
+
+  local yrflag=3
+  local line xpr1 xpr2
+
+  local list_file
+  local archvLIST=archv_list.txt
+  local archsLIST=archs_list.txt
+  local archmLIST=archm_list.txt
+
+  local logfile="${LOG_SCRIPT:-logfile.log}"
+  local outdir="${OUT_DIR:-}"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_HYCOM
+
+  [ -z "${USE_HYCOM:-}" ] && return 0
+
+  $( ! checkDIR -rx "${outdir}" ) && outdir=
+
+
+  ### Check for the required program
+  nm_prog="hycom_wind_ymdh"
+  my_prog=
+  for ilst in ${nm_prog} Bin/${nm_prog}
+  do
+    if $( checkPROG ${ilst} ); then
+      my_prog=${ilst}
+      break
+    fi
+  done
+  if [ -z "${my_prog:-}" ]; then
+    procWarn "The following program were not found:" \
+             "  program = ${nm_prog}" \
+             "in any of the following directories:" \
+             "  curent:      ${cwd}" \
+             "  current/Bin: ${cwd}/Bin" \
+             "This program is used to get the date stamp from the restart files."
+  fi
+
+
+  ### Get the yrflag from the blkdat.input file
+  #yrflag="$( hyc_GetBlkDatValue "${ocnINP:-UNDEF}" yrflag "" )"
+  #  [ $? -ne 0 ] && procError "${yrflag}"
+  ### Use this to get the actual date (needed for restart files)
+  yrflag=3
+
+
+  ### Remove any links created during the simulation.
+  if [ -n "${ocnLINKFILES:+1}" ]; then
+    my_files="${ocnLINKFILES}"
+    for ilst in ${my_files}
+    do
+      if $( checkFILE -rL "${ilst}" ); then
+        echo "       Removing:  ${ilst}" >> ${logfile}
+        rm -f ${ilst}
+      fi
+    done
+  fi
+
+
+  ##########
+  ### BEG:: Rename and move all *arch* files created during the simulation.
+  unset my_UPFX f_pfx f_sfx f_inp f_out my_files
+  my_UPFX=ocn_his_
+  my_files="arch*.a"
+
+  for ilst in ${my_files}
+  do
+    if $( checkFILE -r "${ilst}" ); then
+      arr=( $( echo "${ilst}" | \
+            sed 's/\(.*\)\(\.\)\([0-9].*[0-9]\)\(\.\)\(.*\)/\1 \3 \5/' ) )
+      arrlen=${#arr[@]}
+
+      # In HYCOM the date part of the filename is YYYY_JJJ_HH.
+      # Check if the filename has this date format.
+      if [ ${arrlen} -ne 3 ]; then
+        procWarn "Not a valid filename format: ${ilst}"
+        continue
+      fi
+
+       f_pfx=${arr[0]}
+      f_date=${arr[1]}
+       f_sfx=${arr[2]}
+
+      date=( $( echo "${f_date}" | sed 's/[-_/ .:]/ /g' ) )
+        yr=$(( $( getPosInteger ${date[0]} ) - 1 ))
+        day=${date[1]}
+        hr=${date[2]}
+      date="$( getDate --date="${yr}-12-31 ${hr}:00:00" ) +${day} days"
+        [ $? -ne 0 ] && procError "${date}"
+      date="$( getDate --date="${date}" --fmt='+%F_%T' )"
+        [ $? -ne 0 ] && procError "${date}"
+
+      for f_sfx in a b txt
+      do
+        f_inp="${f_pfx}.${f_date}.${f_sfx}"
+        f_out_base="${my_UPFX}${f_pfx}_${date}.${f_sfx}"
+        f_out="${outdir:+${outdir}/}${f_out_base}"
+        if $( checkFILE -r "${f_inp}" ); then
+          echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+          mv -f "${f_inp}" "${f_out}"
+          if [ "${f_sfx}" = "a" ]; then
+            list_file="$( eval "echo \$$(echo ${f_pfx}LIST)" )"
+            echo ${f_out_base} >> ${outdir:+${outdir}/}${list_file}
+          fi
+        fi
+      done
+    fi
+  done
+  ### END:: Rename and move all *arch* files created during the simulation.
+  ##########
+
+
+  ##########
+  ### BEG:: Rename and move all restart_out files created during the simulation.
+  unset my_UPFX f_pfx f_sfx f_inp f_out my_files
+  my_UPFX=ocn_rst_
+  my_files="restart_out*.a"
+
+  xpr1="^.*RESTART.*:.*nstep.*dtime.*thbase.*="
+
+  for ilst in ${my_files}
+  do
+    f_pfx="${ilst%.*}"
+
+    if $( checkFILE -r "${f_pfx}.b" ); then
+      line="$( grep -Ei "${xpr1}" "${f_pfx}.b" 2>/dev/null | \
+               sed -e 's/.*=//g' )"
+      if [ -n "${my_prog:+1}" -a -n "${yrflag:+1}"  -a -n "${line:+1}" ]; then
+        f_date="$( echo "${line}" | awk '{print $2}' 2>/dev/null )"
+        f_date=( $( echo "${f_date} ${yrflag}" | ${my_prog} | \
+                   sed 's/[-_/[:space:].:]/ /g' ) )
+
+        yr=${f_date[0]}
+        mo=${f_date[1]}
+        da=${f_date[2]}
+        hr=${f_date[3]}
+        date="$( getDate \
+                 --date="${yr}-${mo}-${da} ${hr}:00:00" --fmt='+%F_%T' )"
+
+        for f_sfx in a b txt
+        do
+          f_inp="${f_pfx}.${f_sfx}"
+          f_out="${outdir:+${outdir}/}${my_UPFX}${date}.${f_sfx}"
+          if $( checkFILE -r "${f_inp}" ); then
+            echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+            mv -f "${f_inp}" "${f_out}"
+          fi
+        done
+      else
+        for f_sfx in a b txt
+        do
+          f_inp="${f_pfx}.${f_sfx}"
+          f_out="${outdir:+${outdir}/}${my_UPFX%_*}.${f_sfx}"
+          if $( checkFILE -r "${f_inp}" ); then
+            echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+            mv -f "${f_inp}" "${f_out}"
+          fi
+        done
+      fi
+    fi
+  done
+  ### END:: Rename and move all restart_out files created during the simulation.
+  ##########
+
+
+  ##########
+  ### BEG:: Rename and move all flxdp_out files created during the simulation.
+  unset my_UPFX f_pfx f_sfx f_inp f_out my_files
+  my_UPFX=ocn_
+  my_files="flxdp_out*.a"
+
+  xpr1="^.*FLUXES.*:.*nstep.*dtime.*="
+
+  for ilst in ${my_files}
+  do
+    f_pfx="${ilst%.*}"
+
+    if $( checkFILE -r "${f_pfx}.b" ); then
+      line="$( grep -Ei "${xpr1}" "${f_pfx}.b" 2>/dev/null | \
+               sed -e 's/.*=//g' )"
+      if [ -n "${my_prog:+1}" -a -n "${yrflag:+1}"  -a -n "${line:+1}" ]; then
+        f_date="$( echo "${line}" | awk '{print $2}' 2>/dev/null )"
+        f_date=( $( echo "${f_date} ${yrflag}" | ${my_prog} | \
+                   sed 's/[-_/[:space:].:]/ /g' ) )
+
+        yr=${f_date[0]}
+        mo=${f_date[1]}
+        da=${f_date[2]}
+        hr=${f_date[3]}
+        date="$( getDate \
+                 --date="${yr}-${mo}-${da} ${hr}:00:00" --fmt='+%F_%T' )"
+
+        for f_sfx in a b txt
+        do
+          f_inp="${f_pfx}.${f_sfx}"
+          f_out="${outdir:+${outdir}/}${my_UPFX}${f_pfx%_out*}_${date}.${f_sfx}"
+          if $( checkFILE -r "${f_inp}" ); then
+            echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+            mv -f "${f_inp}" "${f_out}"
+          fi
+        done
+      else
+        for f_sfx in a b txt
+        do
+          f_inp="${f_pfx}.${f_sfx}"
+          f_out="${outdir:+${outdir}/}${my_UPFX}${f_pfx%_out*}.${f_sfx}"
+          if $( checkFILE -r "${f_inp}" ); then
+            echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+            mv -f "${f_inp}" "${f_out}"
+          fi
+        done
+      fi
+    fi
+  done
+  ### END:: Rename and move all flxdp_out files created during the simulation.
+  ##########
+
+
+  ##########
+  ### BEG:: Rename and move all ovrtn_out files created during the simulation.
+  unset my_UPFX f_pfx f_sfx f_inp f_out my_files
+  my_UPFX=ocn_
+  f_inp="ovrtn_out"
+  f_sfx="dat"
+
+  xpr1="^.*time.*year.*day.*="
+
+  if $( checkFILE -r "${f_inp}" ); then
+    line="$( grep -Ei "${xpr1}" "${f_inp}" 2>/dev/null | \
+             sed -e 's/.*=//g' )"
+    if [ -n "${my_prog:+1}" -a -n "${yrflag:+1}"  -a -n "${line:+1}" ]; then
+      f_date="$( echo "${line}" | awk '{print $1}' 2>/dev/null )"
+      f_date=( $( echo "${f_date} ${yrflag}" | ${my_prog} | \
+                 sed 's/[-_/[:space:].:]/ /g' ) )
+
+      yr=${f_date[0]}
+      mo=${f_date[1]}
+      da=${f_date[2]}
+      hr=${f_date[3]}
+      date="$( getDate \
+               --date="${yr}-${mo}-${da} ${hr}:00:00" --fmt='+%F_%T' )"
+
+      f_out="${outdir:+${outdir}/}${my_UPFX}${f_inp}_${date}.${f_sfx}"
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    else
+      f_out="${outdir:+${outdir}/}${my_UPFX}${f_inp}.${f_sfx}"
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    fi
+  fi
+  ### END:: Rename and move all ovrtn files created during the simulation.
+  ##########
+
+
+  ##########
+  ### BEG:: Rename and move all summary_out files created during the simulation.
+  unset my_UPFX f_pfx f_sfx f_inp f_out my_files
+  my_UPFX=ocn_
+  f_inp="summary_out"
+  f_sfx="dat"
+
+  xpr1="[[:space:]]*model[[:space:]]*starts[[:space:]]*at[[:space:]]*day"
+  xpr2="[[:space:]]*goes[[:space:]]*to[[:space:]]*day[[:space:]]"
+
+  if $( checkFILE -r "${f_inp}" ); then
+    line="$( grep -Ei "${xpr1}.*${xpr2}" "${f_inp}" 2>/dev/null )"
+    line="$( toLOWER "${line}" | sed -e "s/.*${xpr2}//g" )"
+    if [ -n "${my_prog:+1}" -a -n "${yrflag:+1}"  -a -n "${line:+1}" ]; then
+      f_date="$( echo "${line}" | awk '{print $1}' 2>/dev/null )"
+      f_date=( $( echo "${f_date} ${yrflag}" | ${my_prog} | \
+                 sed 's/[-_/[:space:].:]/ /g' ) )
+
+      yr=${f_date[0]}
+      mo=${f_date[1]}
+      da=${f_date[2]}
+      hr=${f_date[3]}
+      date="$( getDate \
+               --date="${yr}-${mo}-${da} ${hr}:00:00" --fmt='+%F_%T' )"
+
+      f_out="${outdir:+${outdir}/}${my_UPFX}${f_inp}_${date}.${f_sfx}"
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    else
+      f_out="${outdir:+${outdir}/}${my_UPFX}${f_inp}.${f_sfx}"
+      echo "       Moving:  ${f_inp} -> ${f_out}" >> ${logfile}
+      mv -f "${f_inp}" "${f_out}"
+    fi
+  fi
+  ### END:: Rename and move all summary files created during the simulation.
+  ##########
+
+  return 0
+}
+############################################################
+
+
+############################################################
+##### SWAN RELATED FUNCTIONS
+############################################################
+# -------------------------------------------------------
+# Check_SWANConfig() FUNCTION IS INCOMPLETE
+# Usage:     Check_SWANConfig inp_file
+# Parameters:
+# inp_file : The name of the SWAN input configuration file. This function
+#            will search for a file named "inp_file-tmpl" (inp_tmpl="inp_file-tmpl"),
+#            examine if "inp_tmpl" is a valid SWAN configuration file and
+#            subsequently copy this file: inp_tmpl -> inp_file.
+#            In addition, this function alters the "inp_file" by modyfing
+#            the values of certain variables (see code below) that need to
+#            be modified just once.
+#
+# Returns : 0 (success), >0 (failure)
+#           If SWAN is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Imported parameters from the environment are:
+#            USE_SWAN = Denotes if SWAN is active (Null/Empty value = inactive).
+#             SimBeg  = The begin date of the simulation.
+#            swanDOMS = The number of the SWAN domains (default 1).
+#           swanNPROC = The number of tiles to be constructed in the x-direction
+#                       of the domain (#of cpus in x-direction).
+# Exports : Exported parameters to the environment are:
+#             swanINP swanDOMS swanNODES swanFLG ModelCPUS
+#           swanINP    = The name of the modified input file (inp_file)
+#           swanDOMS   = The total number of the domains defined for SWAN
+#                       (e.g., nests, refined grids, default 1)
+#           swanNODES  = The total number of the CPUs reserved for SWAN
+#           swanFLG    = 0/1, 1 if SWAN is ready for use
+#           ModelCPUS = The total number of CPUs to be used by the modeling system
+#                       (in a stand-alone SWAN configuration).
+# Modifies : Variables that are modified in the SWAN input configuration file are:
+#            TITLE Ngrids NtileI NtileJ LcycleRST DSTART TIME_REF
+#
+# Check_SWANConfig: Checks the validity and perform certain modifications
+#                   on a SWAN input configuration file.
+# -------------------------------------------------------
+Check_SWANConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local -i intval
+  local ifl in_file nproc
+
+  local my_TITLE
+  local my_swanDOMS
+
+  local xpr1 xpr2
+
+
+  ########## Global variables
+  unset swanINP
+  export swanNODES=1
+  export swanFLG=0
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_SWAN
+
+  [ -z "${USE_SWAN:-}" ] && return 0
+
+  in_file=( ${1} )
+  in_file="${in_file[@]}"
+
+  for ifl in ${in_file}
+  do
+    if ! $( checkFILE -r "${ifl}" ); then
+      procError "Couldn't locate the SWAN input file:" \
+                "  File = ${ifl:-UNDEF}"
+    fi
+
+    # ----- is this a SWAN input file?
+    if [ "X$( grep -Ei "^[[:space:]]*Mode.*Stationary"  ${ifl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+       [ "X$( grep -Ei "^[[:space:]]*Mode.*Dynamic"     ${ifl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] || \
+       [ "X$( grep -Ei "^[[:space:]]*Mode.*Dimensional" ${ifl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ] && \
+       [ "X$( grep -Ei "^[[:space:]]*Block.*"           ${ifl} 2>/dev/null | sed -e 's/\!.*//g' )" != "X" ]; then
+      swanINP=( ${swanINP} ${ifl} )
+    else
+      unset swanINP
+      procError "The supplied input file is not a valid SWAN input file:" \
+                "  File = ${ifl}"
+    fi
+  done
+  export swanFLG=1
+  export swanINP="${my_swanINP[@]}"
+  
+  #  make a backup copy of swanINP
+  for ifl in ${in_file}
+  do
+    checkFILE -r "${ifl}.bak"
+    [ $? -eq 0 ] && rm -f ${ifl}.bak
+    cp -f ${ifl} ${ifl}.bak
+  done
+
+
+  # -----
+  # Check if the user requested a number domains to be used,
+  # default = 1.
+  if [ -n "${swanDOMS:+1}" ]; then
+    my_swanDOMS="$(echo "${swanDOMS}" | sed -e 's/[=;:,_\{\}\\]/ /g' | awk '{print $1}')"
+    my_swanDOMS=$( getPosInteger "${my_swanDOMS:-0}" )
+    [ ${my_swanDOMS:-0} -le 0 ] && my_swanDOMS=1
+  fi
+  export swanDOMS=${my_swanDOMS:-1}
+  # -----
+
+
+  # -----
+  # Check if the user requested a number of tiles(cpus) to be used.
+  nproc=1
+  if [ -n "${swanNPROC:+1}" ]; then
+    nproc=( $(echo "${swanNPROC}" | sed -e 's/[=;:,_\{\}\\]/ /g') )
+    nproc=$( getPosInteger "${nproc[0]}" )
+    [ ${nproc:-0} -le 0 ] && nproc=1
+  fi
+
+  export swanNODES=${nproc}
+  # -----
+
+
+  ModelCPUS=${swanNODES}
+  export ModelCPUS
+}
+
+# -------------------------------------------------------
+# Modify_SWANConfig() FUNCTION IS INCOMPLETE
+# Usage:     Modify_SWANConfig
+# Parameters: NONE (the only feed is from the environment)
+#
+# Returns : 0 (success), >0 (failure)
+#           If SWAN is a required component of the modeling system, then on
+#           failure this function issues an error message and exits the
+#           simulation completely.
+# Echoes  : None
+# Imports : Significant imported parameters from the environment are:
+#            USE_SWAN = Denotes if SWAN is active (Null/Empty value = inactive).
+#            DATA_DIR = The directory where the input data are stored
+#                       (Default: current directory).
+#              swanINP = The name of the SWAN input configuration file(s)
+#                       (Exported from Check_SWANConfig).
+#             swanDOMS = The total number of the domains defined for SWAN
+#                       (e.g., nests, refined grids, default 1).
+#               swanDT = The time-step size (baroclinic in 3D, barotropic in 2D),
+#                       one to unlimited entries
+#                       (Default: 600 (seconds)).
+#             swanHFRM = The time lengths to write in each history file for each nest
+#                       that is, write records every XXX seconds
+#                       swanHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                       (Default: 86400 (seconds), 1-day).
+#            firstYR firstMO firstDA firstHR firstMN firstSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       beginning of the current simulation segment.
+#             lastYR  lastMO  lastDA  lastHR  lastMN  lastSC =
+#                       Date as: Year, Month, Day, Hour, Minute, Second of the
+#                       end of the current simulation segment.
+# Exports : Exported parameters to the environment are:
+#             swanLINKFILES
+#        swanLINKFILES = The soft links to the input data created by calling
+#                        this functions.
+# Modifies : Variables that are modified in the SWAN input configuration file are:
+#
+# Modify_SWANConfig: Dynamically modifies the SWAN input configuration file created
+#                    from a previous call of Check_SWANConfig.
+# -------------------------------------------------------
+Modify_SWANConfig()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local ini_date rst_date
+
+  unset swanLINKFILES
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_SWAN
+
+  [ -z "${USE_SWAN:-}" ] && return 0
+
+  if [ -z "${swanINP:-}" ]; then
+    procError "need to define both USE_SWAN=yes and the SWAN input file(s)" \
+              "USE_SWAN = ${my_USE_SWAN}" \
+              "swanINP  = ${swanINP[@]:-UNDEF}"
+  fi
+
+  if ! $( checkFILE -r "${swanINP}" ); then
+    procError "couldn't locate the input file:" \
+              "swanINP  = ${swanINP:-UNDEF}"
+  fi
+
+  swanLINKFILES=
+  export swanLINKFILES
+}
+
+Move_SWANFiles()
+{
+  local nm_func=${FUNCNAME[0]}
+
+  local my_files f_inp f_out
+  local f_pfx f_sfx
+  local ilst
+
+  local logfile="${LOG_SCRIPT:-logfile.log}"
+  local outdir="${OUT_DIR:-}"
+
+
+  # The environment variables USE_* should be already set before calling this function.
+  adjustYESNOVar USE_SWAN
+
+  [ -z "${USE_SWAN:-}" ] && return 0
+
+  $( ! checkDIR -rx "${outdir}" ) && outdir=
+
+
+  ### Remove any links created during the simulation.
+  if [ -n "${swanLINKFILES:+1}" ]; then
+    my_files="${swanLINKFILES}"
+    for ilst in ${my_files}
+    do
+      if $( checkFILE -rL "${ilst}" ); then
+        echo "       Removing:  ${ilst}" >> ${logfile}
+        rm -f ${ilst}
+      fi
+    done
+  fi
+
+
+  ### Rename and move all output files created during the simulation.
+  my_files=
+
+
+  ### Rename and move all restart files created during the simulation.
+  my_files=
+
+  return 0
+}
+############################################################

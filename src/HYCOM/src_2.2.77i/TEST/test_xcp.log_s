@@ -1,0 +1,295 @@
+/bin/cp /u/home/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST/../../topo/partit/depth_GLBt0.72_14.0064 patch.input
+/bin/cp /u/home/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST/test_xcp .
+/scr/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST
+0.0u 0.0s 0:09 1% 0+0k 0+0io 0pf+0w
+0:
+0:
+0:
+0:
+0:
+0:
+0:
+0: 
+0: 
+0: 
+0:     1     1     1      0  100      0   47      1     8
+0:     2     2     1    100   50      0   47      5     4
+0:     3     3     1    150   50      0   47      7     3
+0:     4     4     1    200   74      0   47     -4     6
+0:     5     5     1    274   76      0   47      0     6
+0:     6     6     1    350  100      0   47      2     8
+0:     7     7     1    450   50      0   47      6     4
+0:     8     1     2      0   50     47   48      1     4
+0:     9     2     2     50   50     47   48      3     4
+0:    10     3     2    100   50     47   48      5     4
+0:    11     4     2    150   50     47   48      7     3
+0:    12     5     2    200   50     47   48     -4     4
+0:    13     6     2    250   50     47   48     -2     4
+0:    14     7     2    300   50     47   48      0     4
+0:    15     8     2    350   50     47   48      2     4
+0:    16     9     2    400   50     47   48      4     4
+0:    17    10     2    450   50     47   48      6     4
+0:    18     1     3      0   50     95   48      1     4
+0:    19     2     3     50   50     95   48      3     4
+0:    20     3     3    100   50     95   48      5     4
+0:    21     4     3    150   50     95   48      7     3
+0:    22     5     3    200   50     95   48     -4     4
+0:    23     6     3    250   50     95   48     -2     4
+0:    24     7     3    300   50     95   48      0     4
+0:    25     8     3    350   50     95   48      2     4
+0:    26     9     3    400   50     95   48      4     4
+0:    27    10     3    450   50     95   48      6     4
+0:    28     1     4      0   50    143   48      1     4
+0:    29     2     4     50   50    143   48      3     4
+0:    30     3     4    100   50    143   48      5     4
+0:    31     4     4    150   50    143   48      7     3
+0:    32     5     4    200   50    143   48     -4     4
+0:    33     6     4    250   50    143   48     -2     4
+0:    34     7     4    300   74    143   48      0     6
+0:    35     8     4    374   76    143   48      4     6
+0:    36     9     4    450   50    143   48      6     4
+0:    37     1     5      0   50    191   48      1     4
+0:    38     2     5     50   50    191   48      3     4
+0:    39     3     5    100   50    191   48      5     4
+0:    40     4     5    150   50    191   48      7     3
+0:    41     5     5    200   50    191   48     -4     4
+0:    42     6     5    250   50    191   48     -2     4
+0:    43     7     5    300   50    191   48      0     4
+0:    44     8     5    350  100    191   48      2     8
+0:    45     9     5    450   50    191   48      6     4
+0:    46     2     6     64   36    239   48    -11     4
+0:    47     3     6    100   50    239   48      5     4
+0:    48     4     6    150   50    239   48      7     3
+0:    49     5     6    200  100    239   48     -4     8
+0:    50     6     6    300   57    239   48      0     4
+0:    51     7     6    357   93    239   48     -5     8
+0:    52     2     7     90  100    287   48    -11     9
+0:    53     3     7    190   30    287   48      6     2
+0:    54     5     7    280   70    287   48     -6     6
+0:    55     6     7    350   50    287   48      2     4
+0:    56     7     7    400   40    287   48      4     3
+0:    57     2     8     50   50    335   47    -10     5
+0:    57     2     8     63
+0:    58     3     8     62
+0:    58     3     8    100   50    335   47      5     4
+0:    59     4     8     61
+0:    59     4     8    150   50    335   47      7     3
+0:    60     5     8     60
+0:    60     5     8    200   50    335   47     -4     4
+0:    61     6     8     59
+0:    61     6     8    250   50    335   47     -2     4
+0:    62     7     8     58
+0:    62     7     8    300   50    335   47      0     4
+0:    63     8     8     57
+0:    63     8     8    350   50    335   47      2     4
+0:    64     9     8     56
+0:    64     9     8    400   50    335   47      4     4
+0:    timer statistics, processor   19 out of   64
+0:   -----------------------------------------------
+0:   total    calls =        1   time =    0.01663   time/call =    0.01662898
+0:   xc****   calls =        1   time =    0.00000   time/call =    0.00000143
+0:   xcXput   calls =        6   time =    0.00000   time/call =    0.00000012
+0: (normal)
+0: **************************************************
+0: **************************************************
+0: mpi_finalize called on processor  1
+0:mnproc mproc nproc     i0   ii     j0   jj  i1sum iisum
+0:mnproc mproc nproc mnarct
+0:xclput -     3    2   94   0 1
+0:xclput -     3  495  176   0 1
+0:xclput -    10    1  191   1 0
+0:xclput -    10    7  190   1 0
+0:xclput -    10  491  187   1 0
+0:xclput -    10  494  281   0 1
+10: mpi_finalize called on processor  11
+11: mpi_finalize called on processor  12
+12: mpi_finalize called on processor  13
+13: mpi_finalize called on processor  14
+14: mpi_finalize called on processor  15
+15: mpi_finalize called on processor  16
+16: mpi_finalize called on processor  17
+16:mn,i,j,it,jt,a =   17   52   47  502   94    94.0
+16:mn,i,j,it,jt,a =   17   52   48  502   95    95.0
+16:mn,i,j,it,jt,a =   17   52   49  502   96    96.0
+17: mpi_finalize called on processor  18
+17:mn,i,j,it,jt,a =   18    2    0    2   95    95.0
+17:mn,i,j,it,jt,a =   18    2    1    2   96    96.0
+17:mn,i,j,it,jt,a =   18    2   -1    2   94    94.0
+18: mpi_finalize called on processor  19
+19: mpi_finalize called on processor  20
+1: mpi_finalize called on processor  2
+20: mpi_finalize called on processor  21
+21: mpi_finalize called on processor  22
+22: mpi_finalize called on processor  23
+23: mpi_finalize called on processor  24
+24: mpi_finalize called on processor  25
+25: mpi_finalize called on processor  26
+26: mpi_finalize called on processor  27
+26:mn,i,j,it,jt,a =   27   52    0  502   95    95.0
+26:mn,i,j,it,jt,a =   27   52    1  502   96    96.0
+26:mn,i,j,it,jt,a =   27   52   -1  502   94    94.0
+27: mpi_finalize called on processor  28
+27:mn,i,j,it,jt,a =   28    0   44    0  187   500.0
+27:mn,i,j,it,jt,a =   28    1   48    1  191     1.0
+27:mn,i,j,it,jt,a =   28    2   48    2  191     2.0
+27:mn,i,j,it,jt,a =   28    3   48    3  191     3.0
+27:mn,i,j,it,jt,a =   28    4   48    4  191     4.0
+27:mn,i,j,it,jt,a =   28    5   48    5  191     5.0
+27:mn,i,j,it,jt,a =   28    6   48    6  191     6.0
+27:mn,i,j,it,jt,a =   28    7   47    7  190     7.0
+27:mn,i,j,it,jt,a =   28    7   48    7  191     7.0
+27:mn,i,j,it,jt,a =   28    8   47    8  190     8.0
+27:mn,i,j,it,jt,a =   28    8   48    8  191     8.0
+27:mn,i,j,it,jt,a =   28    9   47    9  190     9.0
+27:mn,i,j,it,jt,a =   28    9   48    9  191     9.0
+27:mn,i,j,it,jt,a =   28   -1   44   -1  187   499.0
+27:mn,i,j,it,jt,a =   28   -2   44   -2  187   498.0
+27:mn,i,j,it,jt,a =   28   -3   44   -3  187   497.0
+27:mn,i,j,it,jt,a =   28   -4   44   -4  187   496.0
+27:mn,i,j,it,jt,a =   28   -5   33   -5  176   176.0
+27:mn,i,j,it,jt,a =   28   -5   34   -5  177   177.0
+27:mn,i,j,it,jt,a =   28   -5   35   -5  178   178.0
+27:mn,i,j,it,jt,a =   28   -5   44   -5  187   495.0
+27:mn,i,j,it,jt,a =   28   10   47   10  190    10.0
+27:mn,i,j,it,jt,a =   28   10   48   10  191    10.0
+27:mn,i,j,it,jt,a =   28   11   47   11  190    11.0
+27:mn,i,j,it,jt,a =   28   12   47   12  190    12.0
+27:mn,i,j,it,jt,a =   28   13   47   13  190    13.0
+27:mn,i,j,it,jt,a =   28   14   47   14  190    14.0
+27:mn,i,j,it,jt,a =   28   15   47   15  190    15.0
+27:mn,i,j,it,jt,a =   28   16   47   16  190    16.0
+28: mpi_finalize called on processor  29
+29: mpi_finalize called on processor  30
+2: mpi_finalize called on processor  3
+30: mpi_finalize called on processor  31
+31: mpi_finalize called on processor  32
+32: mpi_finalize called on processor  33
+33: mpi_finalize called on processor  34
+34: mpi_finalize called on processor  35
+35: mpi_finalize called on processor  36
+35:mn,i,j,it,jt,a =   36   41   44  491  187   491.0
+35:mn,i,j,it,jt,a =   36   42   44  492  187   492.0
+35:mn,i,j,it,jt,a =   36   43   44  493  187   493.0
+35:mn,i,j,it,jt,a =   36   44   44  494  187   494.0
+35:mn,i,j,it,jt,a =   36   45   33  495  176   176.0
+35:mn,i,j,it,jt,a =   36   45   34  495  177   177.0
+35:mn,i,j,it,jt,a =   36   45   35  495  178   178.0
+35:mn,i,j,it,jt,a =   36   45   44  495  187   495.0
+35:mn,i,j,it,jt,a =   36   46   44  496  187   496.0
+35:mn,i,j,it,jt,a =   36   47   44  497  187   497.0
+35:mn,i,j,it,jt,a =   36   48   44  498  187   498.0
+35:mn,i,j,it,jt,a =   36   49   44  499  187   499.0
+35:mn,i,j,it,jt,a =   36   50   44  500  187   500.0
+35:mn,i,j,it,jt,a =   36   51   48  501  191     1.0
+35:mn,i,j,it,jt,a =   36   52   48  502  191     2.0
+35:mn,i,j,it,jt,a =   36   53   48  503  191     3.0
+35:mn,i,j,it,jt,a =   36   54   48  504  191     4.0
+35:mn,i,j,it,jt,a =   36   55   48  505  191     5.0
+35:mn,i,j,it,jt,a =   36   56   48  506  191     6.0
+36: mpi_finalize called on processor  37
+36:mn,i,j,it,jt,a =   37    0   -4    0  187   500.0
+36:mn,i,j,it,jt,a =   37    1    0    1  191     1.0
+36:mn,i,j,it,jt,a =   37    2    0    2  191     2.0
+36:mn,i,j,it,jt,a =   37    3    0    3  191     3.0
+36:mn,i,j,it,jt,a =   37    4    0    4  191     4.0
+36:mn,i,j,it,jt,a =   37    5    0    5  191     5.0
+36:mn,i,j,it,jt,a =   37    6    0    6  191     6.0
+36:mn,i,j,it,jt,a =   37    7    0    7  191     7.0
+36:mn,i,j,it,jt,a =   37    7   -1    7  190     7.0
+36:mn,i,j,it,jt,a =   37    8    0    8  191     8.0
+36:mn,i,j,it,jt,a =   37    8   -1    8  190     8.0
+36:mn,i,j,it,jt,a =   37    9    0    9  191     9.0
+36:mn,i,j,it,jt,a =   37    9   -1    9  190     9.0
+36:mn,i,j,it,jt,a =   37   -1   -4   -1  187   499.0
+36:mn,i,j,it,jt,a =   37   -2   -4   -2  187   498.0
+36:mn,i,j,it,jt,a =   37   -3   -4   -3  187   497.0
+36:mn,i,j,it,jt,a =   37   -4   -4   -4  187   496.0
+36:mn,i,j,it,jt,a =   37   -5   -4   -5  187   495.0
+36:mn,i,j,it,jt,a =   37   10    0   10  191    10.0
+36:mn,i,j,it,jt,a =   37   10   -1   10  190    10.0
+36:mn,i,j,it,jt,a =   37   11   -1   11  190    11.0
+36:mn,i,j,it,jt,a =   37   12   -1   12  190    12.0
+36:mn,i,j,it,jt,a =   37   13   -1   13  190    13.0
+36:mn,i,j,it,jt,a =   37   14   -1   14  190    14.0
+36:mn,i,j,it,jt,a =   37   15   -1   15  190    15.0
+36:mn,i,j,it,jt,a =   37   16   -1   16  190    16.0
+37: mpi_finalize called on processor  38
+38: mpi_finalize called on processor  39
+39: mpi_finalize called on processor  40
+3: mpi_finalize called on processor  4
+40: mpi_finalize called on processor  41
+41: mpi_finalize called on processor  42
+42: mpi_finalize called on processor  43
+43: mpi_finalize called on processor  44
+44: mpi_finalize called on processor  45
+44:mn,i,j,it,jt,a =   45   41   -4  491  187   491.0
+44:mn,i,j,it,jt,a =   45   42   -4  492  187   492.0
+44:mn,i,j,it,jt,a =   45   43   -4  493  187   493.0
+44:mn,i,j,it,jt,a =   45   44   -4  494  187   494.0
+44:mn,i,j,it,jt,a =   45   45   -4  495  187   495.0
+44:mn,i,j,it,jt,a =   45   46   -4  496  187   496.0
+44:mn,i,j,it,jt,a =   45   47   -4  497  187   497.0
+44:mn,i,j,it,jt,a =   45   48   -4  498  187   498.0
+44:mn,i,j,it,jt,a =   45   49   -4  499  187   499.0
+44:mn,i,j,it,jt,a =   45   50   -4  500  187   500.0
+44:mn,i,j,it,jt,a =   45   51    0  501  191     1.0
+44:mn,i,j,it,jt,a =   45   52    0  502  191     2.0
+44:mn,i,j,it,jt,a =   45   53    0  503  191     3.0
+44:mn,i,j,it,jt,a =   45   54    0  504  191     4.0
+44:mn,i,j,it,jt,a =   45   55    0  505  191     5.0
+44:mn,i,j,it,jt,a =   45   56    0  506  191     6.0
+45: mpi_finalize called on processor  46
+46: mpi_finalize called on processor  47
+47: mpi_finalize called on processor  48
+48: mpi_finalize called on processor  49
+49: mpi_finalize called on processor  50
+4: mpi_finalize called on processor  5
+50: mpi_finalize called on processor  51
+51: mpi_finalize called on processor  52
+52: mpi_finalize called on processor  53
+53: mpi_finalize 0-63:STOP (xcstop)
+54: mpi_finalize called on processor  55
+55: mpi_finalize called on processor  56
+56: mpi_finalize called on processor  57
+57: mpi_finalize called on processor  58
+58: mpi_finalize called on processor  59
+59: mpi_finalize called on processor  60
+5: mpi_finalize called on processor  6
+60: mpi_finalize called on processor  61
+61: mpi_finalize called on processor  62
+62: mpi_finalize called on processor  63
+63: mpi_finalize called on processor  64
+6: mpi_finalize called on processor  7
+7: mpi_finalize called on processor  8
+7:mn,i,j,it,jt,a =    8    2   47    2   94    94.0
+7:mn,i,j,it,jt,a =    8    2   48    2   95    95.0
+7:mn,i,j,it,jt,a =    8    2   49    2   96    96.0
+8: mpi_finalize called on processor  9
+9: mpi_finalize called on processor  10
+ATTENTION: 0031-378 MP_EUIDEVICE setting ignored when a resource manager is not being used.  
+Not a terminal
+TERM: Undefined variable.
+Warning: no access to tty; thus no job control in this shell...
+awk {printf("%04d", $1)}
+called on processor  54
+cd /scr/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST
+echo /scr/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST
+echo 64
+else
+if ( -e /site/bin/launch ) then
+logout
+mkdir -p /scr/wallcraf/hycom/GLBt0.72/src_2.2.59_02_mpi/TEST
+poe /site/bin/launch ./test_xcp
+set echo
+set time = 1
+set timestamp
+setenv MEMORY_AFFINITY MCM
+setenv MP_EAGER_LIMIT 32768
+setenv MP_LABELIO YES
+setenv MP_SHARED_MEMORY yes
+setenv MP_SINGLE_THREAD yes
+setenv NMPI 64
+setenv NPATCH `echo $NMPI | awk '{printf("%04d", $1)}'`
+setenv T hycom/GLBt0.72/src_2.2.59_02_mpi/TEST
+setenv UL_MODE PURE_MPI
+setenv UL_TARGET_CPU_LIST AUTO_SELECT

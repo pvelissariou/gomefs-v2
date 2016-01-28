@@ -1,0 +1,16 @@
+&remap_inputs
+num_maps = 2
+grid1_file   = 'scrip_swangrd_d01.nc'
+grid2_file   = 'scrip_romsgrd_d01.nc'
+interp_file1 = 'wav2ocn-weights.nc'
+interp_file2 = 'ocn2wav-weights.nc'
+map1_name = 'SWAN to ROMS Mapping'
+map2_name = 'ROMS to SWAN Mapping'
+map_method = 'conservative'
+normalize_opt = 'fracarea'
+output_opt = 'scrip'
+restrict_type = 'latlon'
+num_srch_bins = 90 
+luse_grid1_area = .false.
+luse_grid2_area = .false.
+/

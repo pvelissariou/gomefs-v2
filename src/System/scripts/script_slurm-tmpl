@@ -1,0 +1,535 @@
+#!/bin/bash
+
+## Author:  Panagiotis Velissariou <pvelissariou@fsu.edu>
+##                                 <velissariou.1@osu.edu>
+## Version: 1.4
+##
+## Version - 1.4 Sat Oct 10 2015
+## Version - 1.3 Wed Jul 29 2015
+## Version - 1.2 Fri Jul 26 2013
+## Version - 1.1 Wed Jul  3 2013
+## Version - 1.0 Tue Jul 31 2012
+
+#####
+## Can run this slurm script by suppling command line options.
+## Example: sbatch [options] this_script [option to this_script]
+#####
+
+##### Options below explained.
+## -N, --nodes=<minnodes[-maxnodes]>
+##     Request that a minimum of minnodes nodes be allocated to this job.
+##     Number of nodes on which to run (uppercase).
+## -n, --ntasks=<number>
+##     Total number of tasks to run (lowercase).
+## -c, --cpus-per-task=<ncpus>
+##     Request that ncpus be allocated per process. Number of cpus per task.
+## --cores-per-socket=<cores>
+##     Restrict  node  selection to nodes with at least the specified
+##     number of cores per socket.
+## --sockets-per-node=<sockets>
+##     Restrict  node selection to nodes with at least the specified
+##     number of sockets.
+## -C, --constraint=<list>
+##     Nodes can have features assigned to them by the Slurm administrator.
+##     Set which nodes to use depending on node features (eg. intel, amd, YEAR2014)
+## -t, --time=<time>
+##     Set a limit on the total run time of the job or job step.
+##     Wall clock limit (default: 14:00:00:00).
+## --mail-type=<type>
+##     Who to send email notification for job state changes.
+## -e, --error=<mode>
+##     Specify how stderr is to be redirected. File for batch script's
+##     standard error (default same as the stdout).
+## -o, --output=<mode>
+##     Specify the mode for stdout redirection. File for batch script's
+##     standard output (default name is slum-$jobid.out).
+## -J, --job-name=<jobname>
+##     Specify  a  name for the job.
+## -p, --partition=<partition_names>
+##     Request a specific partition for the resource allocation.
+##     Queue to submit job, e.g., backfill, generic_q.
+## --exclusive
+##     Run job exclusively, i.e., do not share nodes with other jobs.
+#####
+#SBATCH --ntasks=NTASKS
+##SBATCH --nodes=NNODES
+##SBATCH --sockets-per-node=NSOCKETS
+##SBATCH --cores-per-socket=NCORES
+##SBATCH --cpus-per-task=NCPUS
+##SBATCH --constraint=intel
+##SBATCH --time=HH:MM:SS
+#SBATCH --mail-type=fail
+#SBATCH --error=sbatch_error.log
+#SBATCH --output=sbatch_output.log
+#SBATCH --job-name=run-slurm_MY_MODEL_EXE_
+#SBATCH --partition=coaps_q
+##SBATCH --exclusive
+
+
+# The script name and the directory where this script is located
+scrNAME="$( basename ${0} )"
+
+
+#------------------------------------------------------------
+# UTILITY FUNCTIONS
+#
+[[ ! :$PATH: == *:".":* ]] && export PATH="${PATH}:."
+
+if [ -f functions_run ]; then
+  . functions_run
+else
+  echo " ### ERROR: in ${scrNAME}"
+  echo "     Cannot locate the file: functions_run"
+  echo "     Exiting now ..."
+  echo
+  exit 1
+fi
+#------------------------------------------------------------
+
+
+progDIR=_MY_BINDIR_
+progNAME=_MY_PROG_EXE_
+
+pushd ${progDIR} > /dev/null 2>&1
+  progDIR="$( pwd )"
+popd > /dev/null 2>&1
+
+
+####################
+# Simulation and common variables
+# These variables are shared amongnst all models involved
+# YYYY/MM/DD [HH:MN:SC] or YYYY-MM-DD [HH:MN:SC]
+# The values can be specified here or in the command line
+# Currently the HH:MN:SC are set to: 00:00:00
+#  SimTitle   -> The title for the simulation being run
+#                DEFAULT: GOM 1\/50 degree
+#    SimBeg   -> The starting date for the simulation being run,
+#                in the form of:
+#                  YYYY/MM/DD [HH:MN:SC] or YYYY-MM-DD [HH:MN:SC]
+#                Currently the HH:MN:SC part is set to: "00:00:00"
+#                This value can be either specified here or in the command line
+#                DEFAULT: none, NEEDS TO BE SPECIFIED
+#    SimEnd   -> The ending date for the simulation being run
+#                (format/specification/default similar as in SimBeg)
+#  DATA_DIR   -> The root directory where all necessary data for this
+#                simulation are stored
+#    his_freq -> Frequency of writing the new history files
+#                See: functions "Modify_*Config" found in "functions_run"
+#                DEFAULT: 86400 (seconds) = 1-day
+#    rst_freq -> Frequency of writing the re-start fields
+#                See: functions "Modify_*Config" found in "functions_run"
+#                DEFAULT: 86400 (seconds)
+SimTitle=
+SimBeg=
+SimEnd=
+DATA_DIR=Data
+his_freq=
+rst_freq=
+
+
+####################
+# WRF related variables
+# From this script, only these variables are modified
+# in the WRF input config file (e.g., namelist.input)
+# See: functions "Check_WRFConfig" and "Modify_WRFConfig" in the file "functions_run"
+# wrfPFX      -> Optional prefix for all WRF related I/O files
+#                DEFAULT: none
+# wrfSFX      -> Optional suffix for all WRF related I/O files
+#                DEFAULT: none
+# wrfNPROC_X  -> The number of processors to be assigned for the x-direction
+#                of the computations (modifies the variable nproc_x).
+#                USAGE: wrfNPROC_X=20   (string of unlimited entries)
+#                       wrfNPROC_X=     (empty string)
+#                (script will use only the first entry).
+#                - If wrfNPROC_X is empty the script will get its value
+#                  from the variable nproc_x in the input file
+#                - If wrfNPROC_X is assigned a value, the script will
+#                  modify the variable nproc_x accordingly.
+#                DEFAULT: none
+# wrfNPROC_Y  -> The number processors to be assigned for the y-direction
+#                of the computations (modifies the variable nproc_y).
+#                USAGE: same as "wrfNPROC_X"
+#                Modified the same way as "wrfNPROC_X"
+# wrfDT       -> The time-step size (~6*50km = 300s)
+#                wrfDT="XXX" (one value, for the parent domain only)
+#                DEFAULT: 300 (seconds)
+# wrfHFRM     -> The time lengths to write in each history file for each nest
+#                that is, write records every XXX seconds
+#                wrfHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                DEFAULT: 86400 (seconds), 1-day
+# wrfDOMS     -> The number of nested domains in WRF
+#                (the parent or largest domain always has id=1)
+#                wrfDOMS is set in the function "Check_InputConfigs"
+#                DEFAULT: 1
+wrfPFX=
+wrfSFX=
+wrfNPROC_X=
+wrfNPROC_Y=
+wrfDT=
+wrfHFRM=
+wrfDOMS=
+
+
+####################
+# External forcing variables
+# This is used when:
+#   (a) WRF forcing is not desired and the WRF model is not compiled in;
+#       Atmospheric fields are supplied by external forcing data, these
+#       fields are pre-processed to conform with the Ocean Model formats.
+#   (b) Additional forcing is required for the Ocean Model (e.g., river inputs).
+#   (c) Atmospheric forcing is supplied only from external data (1-way coupling).
+#    USE_FRC  -> Indicates the use of external forcing data (other than WRF);
+#                expected values are 1/yes, 0/no
+#                DEFAULT: no
+#    FRC_DIR  -> The directory or the list of directories where the
+#                forcing files are stored.
+#                DEFAULT: "DATA_DIR DATA_DIR/forcing" (specification is optional).
+#     frcPFX  -> The list of the prefixes (up to the date substring in the filenames)
+#                of ALL forcing files.
+#                DEFAULT: NONE (specification is mandatory).
+#     frcSFX  -> The list of the suffixes (after the date substring in the filenames)
+#                DEFAULT: NONE (specification is optional).
+USE_FRC=
+FRC_DIR=
+frcPFX=
+frcSFX=
+
+
+####################
+# Ocean model {ROMS, HYCOM, etc] related variables
+# From this script, only these variables are modified
+# in the Ocean Model input config file (e.g., ocean.in)
+# See: functions "Check_{MODEL}Config" and "Modify_{MODEL}Config" in the file
+#                "functions_run"
+# ocnPFX      -> Optional prefix for all Ocean Model related I/O files,
+#                this is used when the user needs to differentiate
+#                the input files based on the case being simulated,
+#                or some other reason
+#                DEFAULT: none
+# ocnSFX      -> Optional suffix for all Ocean Model related I/O files,
+#                this is used when the user needs to differentiate
+#                the input files based on the case being simulated,
+#                or some other reason,
+#                or some other reason
+#                DEFAULT: none
+# ocnNPROC_X  -> The number of tiles to be assigned for the x-direction
+#                of the computations (modifies the variable NtileI).
+#                USAGE: ocnNPROC_X="1 3 5 4 ..." (string of unlimited entries)
+#                       ocnNPROC_X=              (empty string)
+#                - If ocnNPROC_X is empty the script will get its values
+#                  from the variable NtileI in the input file
+#                - If the number of entries in ocnNPROC_X are less than
+#                  ocnDOMS, then the last entry in ocnNPROC_X is used
+#                  to fill the remaining entries. Setting for example:
+#                  ocnNPROC_X=6 and ocnDOMS=4 the script will modify
+#                  "ocnNPROC_X" as ocnNPROC_X="6 6 6 6"
+#                DEFAULT: none
+# ocnNPROC_Y  -> The number of tiles to be assigned for the x-direction
+#                of the computations (modifies the variable NtileJ).
+#                USAGE: same as "ocnNPROC_X"
+#                Modified the same way as "ocnNPROC_X"
+#                DEFAULT: none
+# ocnDT       -> The time-step size (baroclinic in 3D, barotropic in 2D),
+#                one to unlimited entries.
+#                Modified in a similar way as "ocnNPROC_X".
+#                DEFAULT: 600 (seconds)
+# ocnNDTFAST  -> The number of barotropic time-steps to reach "ocnDT",
+#                one to unlimited entries.
+#                Modified in a similar way as "ocnNPROC_X".
+#                DEFAULT: 30 (ROMS) (dimensionless)
+# ocnHFRM     -> The time lengths to write in each history file for each nest
+#                that is, write records every XXX seconds
+#                ocnHFRM="XXX XXX XXX ..." (up to number of nested domains)
+#                DEFAULT: 86400 (seconds), 1-day
+# ocnDOMS     -> The number of nested domains in the Ocean Model
+#                (the parent or largest domain always has id=1)
+#                DEFAULT: 1
+#                NOTE: HYCOM is not using this value.
+ocnPFX=
+ocnSFX=
+ocnNPROC_X=
+ocnNPROC_Y=
+ocnDT=
+ocnNDTFAST=
+ocnHFRM=
+ocnDOMS=
+
+
+####################
+# SWAN related variables
+# From this script, only these variables are modified
+# in the SWAN input config file(s) (e.g., ????)
+# See: functions "Check_SWANConfig" and "Modify_SWANConfig" in the file "functions_run"
+# swanPFX     -> Optional prefix for all SWAN related I/O files,
+#                this is used when the user needs to differentiate
+#                the input files based on the case being simulated,
+#                or some other reason
+#                DEFAULT: none
+# swanSFX     -> Optional suffix for all ROMS related I/O files,
+#                this is used when the user needs to differentiate
+#                the input files based on the case being simulated,
+#                or some other reason
+#                DEFAULT: none
+#  swanNPROC  -> The number of processors to be assigned for SWAN computations.
+#                If a value is supplied from the command line and
+#                  COUPLED_SYSTEM=no and USE_SWAN=yes
+#                it overwrites the variable "swanNPROC"
+#                DEFAULT: 1
+# swanDOMS    -> The number of nested domains in SWAN
+#                (the parent or largest domain always has id=1)
+#                DEFAULT: 1
+swanPFX=
+swanSFX=
+swanNPROC=
+swanDOMS=
+
+
+#============================================================
+# NO NEED TO MODIFY ANYTHING BELOW
+#============================================================
+
+
+#------------------------------------------------------------
+##### The name of the filename of main model input file.
+#     This file should exist and be readable by the current user.
+MODEL_INP="${MODEL_INP:-input_script.in}"
+
+##### Call ParseArgs to get all supplied options to the script.
+ParseArgs "${@}"
+
+Adjust_ModelEnvVars
+#------------------------------------------------------------
+
+
+#------------------------------------------------------------
+# Check for the model input configuration file(s). They should
+# exist prior of invoking this script and be readable by the
+# current user (mandatory variable).
+MODEL_INP="$( strTrim "${MODEL_INP}" 2 )"
+if [ -z "${MODEL_INP:-}" ]; then
+  procError "the name of the model input configuration file" \
+            "is a mandatory variable that needs to be specified" \
+            "either from the command line or from the environment." \
+            "usage: ${scrNAME} -i <filename>" \
+            "       or, export MODEL_INP=<filename>"
+else
+  for my_file in ${MODEL_INP}
+  do
+    my_file="${my_file}-tmpl"
+    if ! $( checkFILE -r "${my_file}" ); then
+      procError "Couldn't read the model input configuration file:" \
+                "  Input File = ${my_file:-UNDEF} (default)"
+    fi
+  done
+fi
+#------------------------------------------------------------
+
+
+#------------------------------------------------------------
+# Get/Set all other necessary input variables
+#
+##### The id of the case we are running (if any).
+#     This is just an identification string that separates
+#     model outputs to different directories according
+#     to the case id.
+CASEID="${CASEID:-_MY_CASE_ID_}"
+VERSID="_MY_VER_STR_"
+
+
+##### The output/log directories and the log files.
+OUT_DIR="Output${CASEID:+/${CASEID}}${VERSID:+/${VERSID}}"
+if ! $( checkDIR -rx "${OUT_DIR}" ); then mkdir -p "${OUT_DIR}"; fi
+
+LOG_DIR="Logs${CASEID:+/${CASEID}}${VERSID:+/${VERSID}}"
+if ! $( checkDIR -rx "${LOG_DIR}" ); then mkdir -p "${LOG_DIR}"; fi
+
+LOG_FILE="${LOG_DIR:+${LOG_DIR}/}run.log"
+if $( checkFILE -r "${LOG_FILE}" ); then
+  my_date="$( stat -c "%x" "${LOG_FILE}" | sed 's/\./ /g' | awk '{printf "%s_%s", $1, $2}' )"
+  my_name="$( basename ${LOG_FILE} .log )"
+  mv -f "${LOG_FILE}" "${LOG_DIR:+${LOG_DIR}/}${my_name}_${my_date}.log"
+fi
+
+LOG_SCRIPT="${LOG_DIR:+${LOG_DIR}/}srun_MY_MODEL_EXE_.log"
+if $( checkFILE -r "${LOG_SCRIPT}" ); then
+  my_date="$( stat -c "%x" "${LOG_SCRIPT}" | sed 's/\./ /g' | awk '{printf "%s_%s", $1, $2}' )"
+  my_name="$( basename ${LOG_SCRIPT} .log )"
+  mv -f "${LOG_SCRIPT}" "${LOG_DIR:+${LOG_DIR}/}${my_name}_${my_date}.log"
+fi
+
+
+##### The name of the modulefile(s) to load (if any).
+#     If during compilation modules were used to set the paths
+#     of the compilers/libraries then, the same modules should
+#     be used/loaded at runtime as well.
+#     It is given the option to supply these modules from the
+#     command line of this script, in case the names of the modulefiles
+#     is different or, something went wrong.
+#      MODFILES: is an optional parameter passed if the
+#                user supplied a value for it.
+MODFILES="${MODFILES:-_MY_MODFILES_}"
+##### If MODFILES not what we want, try to use an uncommented option next:
+#MODFILES="${MODFILES:-_MY_COMPSYS__MY_MPISYS_}"
+#MODFILES="${MODFILES:-_MY_COMPSYS__MY_MPIVER_}"
+
+LoadEnvModules ${MODFILES}
+#------------------------------------------------------------
+
+
+#------------------------------------------------------------
+##### Check the input files of all models and check
+#     that only one ocean model is requested.
+#     Get the names of all supported models.
+Check_InputConfigs "${MODEL_INP}"
+
+
+##### The command line to run the model and the total number of cpus
+#     to be used for this run.
+if ! $( checkPROG -r "${progDIR:+${progDIR}/}${progNAME}" ); then
+  procError "Failed to find the executable: ${progDIR:+${progDIR}/}${progNAME}"
+fi
+
+RUN_AS="$( RunModelAs )"
+[ $? -ne 0 ] && procError "${RUN_AS}"
+
+
+##### Check if the -n [cpus] option was supplied to the script
+#     (UserCPUS), if not check for model defined cpus (ModelCPUS)
+#     including the settings in this script (*NPROC* variables).
+#     It has no effect if USE_MPI is unset.
+adjustYESNOVar USE_MPI
+srun_opt=
+if [ -n "${USE_MPI:+1}" ]; then
+  s_npc=${UserCPUS:-0}
+    [ ${s_npc} -le 0 ] && unset s_npc
+  m_npc=${ModelCPUS:-0}
+    [ ${m_npc} -lt -1 ] || [ ${m_npc} -eq 0 ] && unset m_npc
+  npc="${s_npc:-${m_npc:+${m_npc}}}"
+    [ ${npc:-0} -le 0 ] && unset npc
+
+  if [ -n "${npc:+1}" ]; then
+    if [ -n "${m_npc:+1}" -a -n "${s_npc:+1}" ]; then
+      if [ ${m_npc} -ne ${s_npc} ]; then
+        procError "Inconsistent number of CPUs between the values obtained" \
+                  "from the input file(s) and the user's input:" \
+                  "  Input file(s) = ${MODEL_INP:-UNDEF}" \
+                  "      UserCPUS  = ${s_npc:-UNDEF}" \
+                  "      ModelCPUS = ${m_npc:-UNDEF}"
+      fi
+    fi
+  else
+    procError "In parallel MPI/OpenMP simulations the number of CPUs" \
+              "to be used for the current simulation need to be specified:" \
+              "Supplied:" \
+              "        Input file(s) = ${MODEL_INP:-UNDEF}" \
+              "  Number of UserCPUS  = ${s_npc:-UNDEF} (from ${nam_script})" \
+              "  Number of ModelCPUS = ${m_npc:-UNDEF} (from input file(s))" \
+              "  Number of FinalCPUS = ${npc:-UNDEF} (from UserCPUS and ModelCPUS)"
+  fi
+
+  # Set the options passed to srun.
+  srun_opt="${srun_opt} ${npc:+-n ${npc}}"
+
+  srun_opt="${srun_opt} -D ${progDIR}"
+fi
+
+RUN_AS="srun ${srun_opt} ${RUN_AS}"
+#------------------------------------------------------------
+
+
+#------------------------------------------------------------
+# Run the model multiple times using the appropriate restart files.
+# This script assumes that the minimum run has at least a length of 1-day.
+#
+#echo "Setting -> ulimit -c unlimited" >> ${LOG_SCRIPT}
+#ulimit -c unlimited
+echo "      Setting: ulimit -s unlimited" >> ${LOG_SCRIPT}
+ulimit -s unlimited
+
+
+##### Get the simulation start/end dates and break the simulation
+#     length in monthly chunks (if the simulation length spans
+#     more than one month)
+#     See comments in the FirstLastDates funcion (in functions_common)
+FirstLastDates "${SimBeg}" "${SimEnd}"
+prev=( ${previousDATES} )
+first=( ${firstDATES} )
+last=( ${lastDATES} )
+next=( ${nextDATES} )
+unset previousDATES firstDATES lastDATES nextDATES
+
+
+##### Run the coupled system.
+for ((idate = 0; idate < ${#first[@]}; idate++))
+do
+    tmp_str="$( echo "${first[${idate}]}" | sed -e 's/[;:,_\/-]/ /g' )"
+  firstYR=$( echo "${tmp_str}" | awk '{print $1}' )
+  firstMO=$( echo "${tmp_str}" | awk '{print $2}' )
+  firstDA=$( echo "${tmp_str}" | awk '{print $3}' )
+  firstHR=$( echo "${tmp_str}" | awk '{print $4}' )
+  firstMN=$( echo "${tmp_str}" | awk '{print $5}' )
+  firstSC="00"
+    tmp_str="$( echo "${last[${idate}]}" | sed -e 's/[;:,_\/-]/ /g' )"
+  lastYR=$( echo "${tmp_str}" | awk '{print $1}' )
+  lastMO=$( echo "${tmp_str}" | awk '{print $2}' )
+  lastDA=$( echo "${tmp_str}" | awk '{print $3}' )
+  lastHR=$( echo "${tmp_str}" | awk '{print $4}' )
+  lastMN=$( echo "${tmp_str}" | awk '{print $5}' )
+  lastSC="00"
+    tmp_str="$( echo "${prev[${idate}]}" | sed -e 's/[;:,_\/-]/ /g' )"
+  prevYR=$( echo "${tmp_str}" | awk '{print $1}' )
+  prevMO=$( echo "${tmp_str}" | awk '{print $2}' )
+  prevDA=$( echo "${tmp_str}" | awk '{print $3}' )
+  prevHR=$( echo "${tmp_str}" | awk '{print $4}' )
+  prevMN=$( echo "${tmp_str}" | awk '{print $5}' )
+  prevSC="00"
+    tmp_str="$( echo "${next[${idate}]}" | sed -e 's/[;:,_\/-]/ /g' )"
+  nextYR=$( echo "${tmp_str}" | awk '{print $1}' )
+  nextMO=$( echo "${tmp_str}" | awk '{print $2}' )
+  nextDA=$( echo "${tmp_str}" | awk '{print $3}' )
+  nextHR=$( echo "${tmp_str}" | awk '{print $4}' )
+  nextMN=$( echo "${tmp_str}" | awk '{print $5}' )
+  nextSC="00"
+
+  # ---------- Modify/Adjust the configuation of all supported models
+  #            based on the simulation dates and other user inputs.
+  # Config of all supported ocean models.
+  for imod in ${ocnMODELS}
+  do
+    command -v Modify_${imod}Config >/dev/null 2>&1 && \
+      Modify_${imod}Config
+  done
+
+  # Config of the WRF model.
+  command -v Modify_WRFConfig >/dev/null 2>&1 && \
+    Modify_WRFConfig
+
+  # Config of the SWAN model.
+  command -v Modify_SWANConfig >/dev/null 2>&1 && \
+    Modify_SWANConfig
+
+  # ---------- Run the model/system.
+  echo "      Running: ${RUN_AS}" >> ${LOG_SCRIPT}
+  ${RUN_AS} >> ${LOG_FILE} 2>&1
+  RUN_STATUS=$?
+
+  if [ ${RUN_STATUS:-0} -ne 0 ]; then
+    procError "The modeling system failed to run successfully," \
+              "please check the log files:" \
+              "    Log File = ${LOG_FILE:-UNDEF}" \
+              "  Log Script = ${LOG_SCRIPT:-UNDEF}"
+  fi
+
+  # ---------- Post-processing stage of the modeling system.
+  # Move/Rename all modeling system output files
+  Move_Files >> ${LOG_SCRIPT} 2>&1
+
+  # ---------- Next monthly runs will use restart files for all models.
+  FORCE_INI=0
+done
+#------------------------------------------------------------
+
+rm -f ${ocnGRDLINKS}
+[ -d nest ] && rmdir nest 2>/dev/null
+
+exit 0

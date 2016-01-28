@@ -1,0 +1,19 @@
+cd /u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi/TEST
+echo /u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi/TEST
+/u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi/TEST
+setenv ARCH Asp6-nofl
+cd ..
+echo /u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi
+/u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi
+setenv TYPE `echo $cwd | awk -F"_" '{print $NF}'`
+awk -F_ {print $NF}
+cd TEST
+echo /u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi/TEST
+/u/home/wallcraf/hycom/GLBt0.72/src_2.2.60_02_mpi/TEST
+if ( ! -e ../../config/Asp6-nofl_mpi ) then
+cp ../mod_advem.mod ../mod_archiv.mod ../mod_archiv.o ../mod_dimensions.mod ../mod_dimensions.o ../mod_floats.mod ../mod_floats.o ../mod_hycom.mod ../mod_hycom.o ../mod_incupd.mod ../mod_incupd.o ../mod_mean.mod ../mod_mean.o ../mod_pipe.mod ../mod_pipe.o ../mod_tides.mod ../mod_tides.o ../mod_xc.mod ../mod_xc.o ../mod_za.mod ../mod_za.o .
+foreach t ( xci )
+make xci ARCH=Asp6-nofl TYPE=mpi
+	mpxlf95  -qfixed -O3 -qstrict -qarch=pwr6 -qtune=pwr6 -qcache=auto -qspillsize=32000 -qrealsize=8 -qintsize=4 -q64 -qwarn64 -b64 -o test_xci  test_xci.o  ../machine.o ../machi_c.o ../wtime.o mod_xc.o mod_za.o
+end
+endif

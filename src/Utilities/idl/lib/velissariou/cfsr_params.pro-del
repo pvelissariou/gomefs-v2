@@ -1,0 +1,20 @@
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;%%%%%%%%%% CFSR RELATED PARAMETERS
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;-------------------------------------------------
+; input/output directories relative to HYCOM directory
+cfsr_dataDIR  = FilePath('Data', Root_Dir = rootDIR, SubDirectory = 'DATA-CFSR')
+cfsr_outDIR   = FilePath('Output', Root_Dir = rootDIR, SubDirectory = 'DATA-CFSR')
+cfsr_plotsDIR = FilePath('plots', Root_Dir = rootDIR, SubDirectory = 'DATA-CFSR')
+
+;-------------------------------------------------
+; the following re-assign the values of the parameters set in proj_params.pro
+; for CFSR plots
+cfsr_LON_MIN = -100.00
+cfsr_LON_MAX =  -74.00
+cfsr_LAT_MIN =   16.00
+cfsr_LAT_MAX =   34.00
+cfsr_map_coords = [ cfsr_LAT_MIN, cfsr_LON_MIN, cfsr_LAT_MAX, cfsr_LON_MAX ]
+
+
+TIME_MISSING_VAL = -100000L

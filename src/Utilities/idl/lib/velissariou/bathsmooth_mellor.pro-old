@@ -1,0 +1,186 @@
+Function BathSmooth_Mellor, darr,                        $
+                            marr,                        $
+                            RX0 = rx0,                   $
+                            TOL = tol,                   $
+                            MAXRFAC = maxrfac,           $
+                            REPORT = report,             $
+                            FULL_REPORT = full_report,   $
+                            EIGHT = eight
+;+++
+; NAME:
+;	HANEY
+;
+; VERSION:
+;	1.0
+;
+; PURPOSE:
+;	To smooth locally a bathymetry to be used in a sigma enable hydrodynamic
+;       model. The smoothing is performed locally (when needed) using Mellor's
+;       approach.
+;
+;       See:      G. L. Mellor, T. Ezer and L. Y. Oey, 1994. The pressure gradient
+;            conundrum of sigma coordinate ocean models. Journal of Atmospheric and
+;            Oceanic Technology, 11, 1126-1134.
+;                Haney, R. L., 1991. On the pressure gradient force over steep
+;            bathymetry in sigma coordinates ocean models. J. Phys. Oceanogr.
+;            21, 610-619.
+;                Beckmann, A., Haidvogel, D.B., 1993. Numerical simulation of
+;            flow around a tall isolated seamount. Part I: Problem formulation
+;            and model accuracy. J. Phys. Oceanogr. 23, 1736-1753.
+;                 Mathieu Dutour Sikiric, Ivica JaneKovic, Milivoj Kuzmic, 2009.
+;            A new approach to bathymetry smoothing in sigma-coordinate ocean
+;            models. Ocean Modelling 29, 128-136.
+;                 http://www.liga.ens.fr/~dutour/Bathymetry/
+;                 http://www.liga.ens.fr/~dutour/Presentations/SteepnessPres.pdf
+;
+; AUTHOR:
+;
+;      Panagiotis Velissariou, Ph.D, P.E.
+;      E-mail: pvelissariou@coaps.fsu.edu
+;
+; CALLING SEQUENCE:
+;	rx = BathSmooth_Mellor(darr, marr, [[rx0 = rx0], [tol = tol],
+;                                           [maxrfac = maxrfac],
+;                                           [/report], [/full_report], [/eight]])
+;	     darr - The depth array (bathymetry). This is a 2D array of values
+;                   that represent the water depths (positive) at the gidded
+;                   locations.
+;            marr - The 2D mask array of the land points (<= 0 <- land AND > 0 -> water)
+;
+; KEYWORDS:
+;             rx0 - This keyword variable is for the maximum value of the rx0
+;                   stiffness parameter that controls the level of smoothing.
+;                   User input. Default: rx0 = 0.2
+;             tol - Set the tolerance where the calculations are finished
+;                   (that is, when rx0 (calculated) <= rx0 (input) + tol.
+;                   Range: 0.00001 - 0.01
+;                   User input. Default: rx0 = 0.0001
+;         maxrfac - Set this keyword to a named variable that receives the
+;                   max value of the calculated final Beckman & Haidvogel
+;                   stiffness parameter
+;          report - Set this keyword if you want to see the progress of the
+;                   calculations
+;     full_report - Set this keyword if you want to see the full progress of the
+;                   calculations
+;           eight - Set this keyword if you want to use all eight surrounding
+;                   grid points for the calculations
+;                   default: use only the four grid points (cross)
+;
+; RETURNS:
+;      fixed_darr - The modified (smoothed) bathymetry
+;
+; SIDE EFFECTS:
+;	As far as I know none.
+;
+; MODIFICATION HISTORY:
+;	Created August 10 2011 by Panagiotis Velissariou (pvelissariou@fsu.edu).
+;+++
+
+  Compile_Opt IDL2
+
+  On_Error, 2
+
+  If (N_Elements(darr) EQ 0) Then Message, "Must pass <darr> argument."
+  If (Where([7, 8, 10, 11] EQ Size(darr, /TYPE)) GE 0) Then $
+    Message, "Strings, structures, ... are not valid values for <darr>."
+  If (Size(darr, /N_DIMENSIONS) NE 2) Then $
+    Message, "<darr> must be a 2D array of values."
+  
+  If (N_Elements(marr) EQ 0) Then Message, "Must pass <marr> argument."
+  If (Where([7, 8, 10, 11] EQ Size(marr, /TYPE)) GE 0) Then $
+    Message, "Strings, structures, ... are not valid values for <marr>."
+  If (Size(marr, /N_DIMENSIONS) NE 2) Then $
+    Message, "<marr> must be a 2D array of mask values."
+  
+  dims_darr = Size(darr, /DIMENSIONS)
+  If (Array_Equal(dims_darr, Size(marr, /DIMENSIONS)) EQ 0) Then $
+    Message, "<darr, marr> have inconsistent dimensions."
+
+  rx0 = (N_Elements(rx0) EQ 0) ? 0.2 : (0.0 > Float(rx0[0]) < 1.0)
+
+  tol = (N_Elements(tol) EQ 0) ? 0.0001 : (0.00001 > Float(tol[0]) < 0.01)
+
+  If Keyword_Set(eight) Then Begin
+    DirArr = [ [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1] ]
+  EndIf Else Begin
+    DirArr = [ [1, 0], [0, 1], [-1, 0], [0, -1] ]
+  EndElse
+
+  IPNTS = dims_darr[0]
+  JPNTS = dims_darr[1]
+
+  rx0_ratio = (1.0 - rx0) / (1.0 + rx0)
+
+  ; get the initial slope stiffness parameter
+  max_rfac = Haney(darr, marr, RFAC = RFac, report = full_report, EIGHT = eight)
+  rfacIDX = Where(RFac GT rx0, rfacCNT)
+  maxrfac = Max(RFac)
+
+  If (rfacCNT EQ 0) Then Return, darr
+
+  mskIDX = Where(marr GT 0.0, mskCNT)
+
+  iter = 0L
+  tolH = 0.000001
+  fixed_darr = darr
+  While (1) Do Begin
+    stopFLAG = 1
+
+    If Keyword_Set(report) Then $
+      print, 'Iteration: ', ++iter, 'maxrfac = ', maxrfac, 'fix points = ', rfacCNT, $
+              format = '(a11, i4, a12, f11.8, a15, i8)'
+
+    For imsk = 0L, mskCNT - 1 Do Begin
+      idx = intarr(2)
+      idl_locidx, [IPNTS, JPNTS], 2, mskIDX[imsk], idx
+      i = idx[0]
+      j = idx[1]
+
+      If Keyword_Set(full_report) Then $
+        print, '  Doing ', imsk + 1, '  of:  ', mskCNT, format = '(a6, i9, a7, i9)'
+
+      IdxArr = [ [(DirArr[0, *] + i > 0) AND (DirArr[0, *] + i < (IPNTS - 1)), $
+                  (DirArr[1, *] + j > 0) AND (DirArr[1, *] + j < (JPNTS - 1))] ]
+      idx_err = where((IdxArr[0, *] EQ i) AND (IdxArr[1, *] EQ j), complement = idx, icnt)
+      IdxArr  = IdxArr[*, idx]
+
+      idx = Where(marr[IdxArr[0,*], IdxArr[1,*]] GT 0.0, icnt)
+
+      If (icnt GT 0) Then Begin
+        IdxArr = [IdxArr[0, idx], IdxArr[1, idx]]
+      EndIf Else Begin
+        Message, 'We encountered a single wet point at: ' + $
+                 string(i, j, format = '(2i5)')
+      EndElse
+
+      nIJ = N_Elements(IdxArr[0, *])
+      TmpRFAC = Make_Array(nIJ, /FLOAT, VALUE = 0.0)
+
+      For ij = 0, nIJ - 1 Do Begin
+        iIJ = IdxArr[0, ij]
+        jIJ = IdxArr[1, ij]
+
+        lowH = rx0_ratio * fixed_darr[iIJ, jIJ]
+        If ((fixed_darr[i, j] - lowH) LT - tolH) Then Begin
+          stopFLAG = 0
+          H = (lowH - fixed_darr[i, j]) / (1.0 + rx0_ratio)
+          fixed_darr[i, j] = fixed_darr[i, j] + H
+          fixed_darr[iIJ, jIJ] = fixed_darr[iIJ, jIJ] - H
+        EndIf
+
+        absval1 = Abs(fixed_darr[i, j] - fixed_darr[iIJ, jIJ])
+        absval2 = Abs(fixed_darr[i, j] + fixed_darr[iIJ, jIJ])
+        TmpRFAC[ij] = (absval1 LE 0.001) ? 0.0 : (absval1 / absval2)
+      EndFor
+      RFac[i, j] = Max(TmpRFAC)
+    EndFor
+
+    rfacIDX = Where(RFac GT rx0, rfacCNT)
+    maxrfac = Max(RFac)
+
+    If (stopFLAG EQ 1) OR (maxrfac LE (rx0 + tol)) Then Break
+  EndWhile
+
+  Return, fixed_darr
+
+End

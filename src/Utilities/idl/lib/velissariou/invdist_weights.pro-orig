@@ -1,0 +1,39 @@
+Function InvDist_Weights, dval,                  $
+                          CLOSEDIST = closedist, $
+                          EXPNT = expnt,         $
+                          SHEPARD = shepard,     $
+                          METH = meth
+
+  on_error, 2
+
+  if (n_elements(closedist) eq 0) then closedist = 10.0 ; in meters?
+  if (n_elements(expnt) eq 0) then expnt = 2.0
+  str_exp = strtrim(string(expnt, format = '(f12.3)'), 2)
+
+  wh = fltarr(n_elements(dval))
+  retval = wh
+
+  ; check for the nearest point first
+  idx = (where(abs(dval) lt closedist, icnt))[0]
+
+  if (icnt ne 0) then begin
+    wh[idx] = 1.0
+    retval = wh
+    meth = 'nearest point'
+  endif else begin
+    if (keyword_set(shepard) eq 1) then begin
+      wh = 1.0 / (dval ^ expnt)
+      wh = wh / total(wh)
+      meth = 'inverse distance ' + '(Shepard, expnt = ' + str_exp + ')'
+    endif else begin
+      max_dval = 1.001 * max(dval)
+      wh = ((max_dval - dval) / (max_dval * dval)) ^ expnt
+      wh = wh / total(wh)
+      meth = 'inverse distance ' + '(modified Shepard, expnt = ' + str_exp + ')'
+    endelse
+    retval = wh
+  endelse
+
+  return, retval
+
+End

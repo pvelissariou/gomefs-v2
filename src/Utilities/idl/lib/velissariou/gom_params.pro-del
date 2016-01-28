@@ -1,0 +1,93 @@
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;%%%%%%%%%% GOM-ROMS RELATED PARAMETERS
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+;-------------------------------------------------
+; Sigma coordinate definitions
+SLAY = 50
+
+;STHETA =  5.0d
+;BTHETA =  0.4d
+;TCLINE =  100.0d
+
+;STHETA =  5.0d
+;BTHETA =  0.4d
+;TCLINE =  10.0d
+
+STHETA =  5.0d
+BTHETA =  0.1d
+TCLINE =  0.0d
+
+;STHETA =  0.0d
+;BTHETA =  0.0d
+;TCLINE =  1.0d16
+
+;Vtransform  = 1
+;Vstretching = 1
+Vtransform  = 2
+Vstretching = 4
+
+T0 = 20.0d
+S0 = 35.0d
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+; This is the average earth radius as defined in HYCOM
+; We use this here to define the defaults for all model
+; calculations.
+;Always use double precision
+EARTH_RADIUS = (n_elements(EARTH_RADIUS) ne 0) ? EARTH_RADIUS : 6371001.0D
+
+; For GOM plots and data gathering
+; Actual values from the bathymetry
+;gom_LON_MIN = -98.00000
+;gom_LON_MAX = -76.40000
+;gom_LAT_MIN =  18.09165
+;gom_LAT_MAX =  31.96065
+
+; for GOM data gathering (this bounding box encloses the GOM domain)
+gom_LON_MIN = -98.0050
+gom_LON_MAX = -76.3950
+gom_LAT_MIN =  18.00
+gom_LAT_MAX =  32.00
+
+gom_LON0 = -101.00
+gom_LAT0 =   15.0
+gom_LON  = 0.5 * (gom_LON_MIN + gom_LON_MAX)
+gom_LAT  = 0.5 * (gom_LAT_MIN + gom_LAT_MAX)
+
+map_coords = [ gom_LAT_MIN, gom_LON_MIN, gom_LAT_MAX, gom_LON_MAX ]
+
+; for GOM plots
+gomPLOT_LON_MIN = -98.00
+gomPLOT_LON_MAX = -76.40
+gomPLOT_LAT_MIN =  18.00
+gomPLOT_LAT_MAX =  32.00
+PLOT_map_coords = [ gomPLOT_LAT_MIN, gomPLOT_LON_MIN, gomPLOT_LAT_MAX, gomPLOT_LON_MAX ]
+
+gom_map_proj = 'Mercator'
+gom_mapStruct = VL_GetMapStruct(gom_map_proj, $
+                                CENTER_LATITUDE     = gom_LAT, $
+                                CENTER_LONGITUDE    = gom_LON, $
+                                TRUE_SCALE_LATITUDE = gom_LAT, $
+                                DATUM               = 'Sphere',   $
+                                SEMIMAJOR_AXIS      = EARTH_RADIUS, $
+                                SEMIMINOR_AXIS      = EARTH_RADIUS)
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;%%%%%%%%%% GOM-ROMS LATERAL BOUNDARY CONDITIONS TO BE DEFINED
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+;-------------------------------------------------
+; ROMS lateral boundary conditions
+; <= 0 = off
+; > 0 = on
+;  WEST: BND_DEF[0]
+; SOUTH: BND_DEF[1]
+;  EAST: BND_DEF[2]
+; NORTH: BND_DEF[3]
+BND_DEF = [ 0, 1, 1, 1 ]
+;BND_DEF = [ 0, 1, 0, 0 ]
+;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

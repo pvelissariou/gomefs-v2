@@ -1,0 +1,160 @@
+diff -ibw common_blocks.h /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jul  2011 - added salfac.
+< c> Aug  2011 - replaced dpold and dpoldm with dpo
+< c> Aug  2011 - added ra2fac, removed wts[12] and wuv[12]
+< c> Aug  2011 - added hybraf
+< c> Sep  2011 - added cbp.
+< c> Nov  2011 - added icpfrq
+< c> Jan  2012 - added thkcdw
+< c> Mar  2012 - replaced dssk with dpns and dsns
+< c> Nov  2012 - added stroff and oftaux,oftauy
+
+diff -ibw mod_xc_mp.h /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov. 2011 - time every 50-th event above 5,000 (was 1,000).
+< c> Mar. 2012 - added optional mnflg to xclput
+< c> Mar. 2012 - bugfix to periodic case in xclput
+< c> Apr. 2012 - added optional mnflg to xceget and xceput
+< c> Apr. 2012 - added xciget and xciput
+< c> Nov. 2012 - added the OCEANS2 macro and xcpipe
+
+diff -ibw mod_za_mp.h /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov  2012 - iahand in separate common block
+
+diff -ibw barotp.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - reworked Robert-Asselin filtering for btrlfr
+< c> Mar. 2012 - added latbdtf for nesting with Flather b.c.'s.
+
+diff -ibw cnuity.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - replaced dpold,dpoldm with dpo
+< c> Aug  2011 - apply Robert-Asselin filter to dp here (used to be in tsadvc)
+< c> Jan  2012 - check for zero thickness top layer
+< c> Aug  2012 - fixed model hang on neg. dp bug
+
+diff -ibw convec.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - replaced dpold,dpoldm with dpo
+
+diff -ibw diapfl.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - replaced dpold,dpoldm with dpo
+
+diff -ibw forfun.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jul  2011 - added forfuns for salfac
+< c> Sep  2011 - added cbp
+< c> Nov. 2012 - added wndflg=4 for reading 10m wind components
+< c> Nov. 2012 - added iftaux,oftauy, primarily for wndflg=4
+
+diff -ibw hybgen.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 -- Option to apply Robert-Asselin filter to hybgen's updated dp
+< c> Mar  2012 -- Replaced dssk with dpns and dsns, see blkdat.F for info
+< c> July 2012 -- Bugfix for tracer in too-light deepest inflated layer
+< c> Sep  2012 -- Added ndebug_tracer for tracer debuging
+< c> Sep  2012 -- Don't unmix in terrain-following regime
+
+diff -ibw icloan.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov. 2011 - don't apply atmosphere to ice surface exchange when "coupling"
+< c> May  2012 - limit brine rejection to be a non-negative salt flux
+< c> July 2012 - flxice and sflice now correctly represent cell average under ice
+< c> Nov. 2012 - weaker dependance on covice when freezing
+
+*****     *****     *****     *****     *****     *****     *****
+diff -ibw inicon.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Mar  2012 - replaced dssk with dpns and dsns
+
+diff -ibw latbdy.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug. 2011 -- tidal response at ports added
+< c> Mar. 2012 -- added latbdtf
+< c> Mar. 2012 -- replaced speed[nsew] with pspeed, so that ports can "overlap"
+< c  Mar. 2012 -- added mnp to select mnflg for xclegt and xclput
+< c> Apr. 2012 -- added latbd_tide
+< c> Apr. 2012 -- replaced xclget and xclput with xciget and xciput in latbdtf
+< c> June 2012 -- replaced xclget and xclput with xciget and xciput in latbdt
+< c> June 2012 -- removed parameter mports, arrays are allocated at run time
+< c> June 2012 -- fixed bnest interpolation bug, use lb[01] not ln[01]
+
+diff -ibw momtum.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jul  2011 - salfac(i,j) in place of tidsal
+< c> Jul  2011 - modified momtum4 based on NERSC 2.1.03_MPI momtum_quick
+< c> Jul  2011 - modified momtum4 to use viscp and viscq
+< c> Jul  2011 - modified momtum4 to use local arrays for y advection
+< c> Jul  2011 - modified momtum4 to always use v 0 -v for extrapolation
+< c> Aug  2011 - use ra2fac for wuv1 and wuv2 (so now wuv==wts)
+< c> Aug  2011 - replaced dpold,dpoldm with dpo
+< c> Aug  2011 - reworked Robert-Asselin time filter
+< c> Sep  2011 -    cbp(i,j) in place of cb
+< c> Jan  2012 - added thkcdw
+< c> July 2012 - bugfix for bottom drag when depth < thkbot
+< c> July 2012 - thkbop is now always based on thkbot (even for bblkpp)
+< c> Nov. 2012 - surtx,y are halo_pv (not halo_ps)
+< c> Nov. 2012 - wndflg=4 for calculating wind stress using cd_coare
+< c> Nov. 2012 - oftaux,oftauy for wind stress offset
+
+diff -ibw mxkrt.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - replaced wts[12] with ra2fac
+
+diff -ibw mxkrtm.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - replaced dpold,dpoldm with dpo
+
+diff -ibw restart.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug. 2010 - 49-hour DETIDE
+< c> May  2012 - added restart_zero
+
+diff -ibw thermf.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov  2011 - ignore sssrmx, i.e. fully relax to sss, under ice
+
+diff -ibw trcupd.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug. 2012 - constant in time trwall remains exactly constant
+
+diff -ibw tsadvc.f /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Aug  2011 - reworked Robert-Asselin filter, RA of dp now in cnuity
+< c> Aug  2012 - RA filter now exactly conserves constant tracers
+< c> Sep  2012 - RA filter not applied if thickness < onezm
+
+diff -ibw blkdat.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jul  2011 - added negative tidsal
+< c> Aug  2011 - added ra2fac, removed global wts[12] and wuv[12]
+< c> Aug  2011 - added hybraf
+< c> Sep  2011 - added negative cb
+< c> Nov  2011 - iniflg=2 now active for yrflag=3
+< c> Nov  2011 - added frzifq
+< c> Jan  2012 - added thkcdw
+< c> Jan  2012 - added lbflag=4
+< c> Mar  2012 - new terrain following method, based on dpns and dsns
+< c> Apr  2012 - added negative tidflg, to set tidef
+< c> May  2012 - added tidein, replaces negative tidflg
+< c> Nov  2012 - added OCEANS2 macro for master/slave HYCOM
+< c> Nov  2012 - added wndlfg=4 for 10m wind component input
+< c> Nov  2012 - added stroff, usualy used with wndflg=4
+
+diff -ibw geopar.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Mar. 2012 - replaced dssk with dpns and dsns
+
+diff -ibw mod_archiv.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov. 2012 - added surtx and surty to archs.input
+
+diff -ibw mod_floats.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov  2012 - implicit none added by Till Andreas Rasmussen
+
+diff -ibw mod_hycom.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov. 2011 - can now start from climatology when yrflag=3
+< c> Jan. 2012 - smooth imported ice drift and exported ocean currents
+< c> Jan. 2012 - added thkcdw
+< c> Aug. 2012 - use CICE fields for ice statistics when available
+< c> Aug. 2012 - call pipe_init after blkdat
+
+diff -ibw mod_incupd.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Nov  2012 - bugfix: added xctilr(dpinc to update halo
+
+diff -ibw mod_pipe.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jan  2012 - added PIPE_NAN       for NaN checking
+< c> Aug  2012 - added PIPE_TRACERNAN for tracer NaN checking
+< c> Aug  2012 - added PIPE_TRACERMAX for tracer maximum checking
+< c> Sep  2012 - pipe files in directory flnminp
+
+diff -ibw mod_tides.F /u/home/wallcraf/hycom/GOMl0.04/src_2.2.36Ai13_20_mpi
+< c> Jun  2011 - added nodal corrections, recalculated daily
+< c> Aug  2011 - use 49-hr filtered near bottom velocities
+< c> Aug  2011 - added tides_ports
+< c> Mar  2012 - added zA to tides_ports, for curvilinear grids
+< c> Apr  2012 - added the option to read in tidal body forcing
+< c> May  2012 - added the option to read in SAL complex amplitudes
+< c> May  2012 - tidein in place of tidef
+< c> Jul  2012 - use a 49-hr diurnal filter

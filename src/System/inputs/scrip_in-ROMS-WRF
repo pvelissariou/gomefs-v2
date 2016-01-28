@@ -1,0 +1,16 @@
+&remap_inputs
+num_maps = 2
+grid1_file   = 'scrip_romsgrd_d01.nc'
+grid2_file   = 'scrip_wrfgrd_d01.nc'
+interp_file1 = 'ocn2atm-weights.nc'
+interp_file2 = 'atm2ocn-weights.nc'
+map1_name = 'ROMS to WRF Mapping'
+map2_name = 'WRF to ROMS Mapping'
+map_method = 'conservative'
+normalize_opt = 'fracarea'
+output_opt = 'scrip'
+restrict_type = 'latlon'
+num_srch_bins = 90 
+luse_grid1_area = .false.
+luse_grid2_area = .false.
+/

@@ -1,0 +1,175 @@
+#
+# --- HYCOM 2.2 makefile 
+#
+# --- Tunable parameters in ../config/$(ARCH)_$(TYPE)
+#
+
+.SUFFIXES: 
+.SUFFIXES: .c .F .o
+
+.F:
+	@echo "Must have an explicit rule for" $*
+
+.c:
+	@echo "Must have an explicit rule for" $*
+
+#
+# ---------------------------------------------------------------------
+# directory locations
+# ---------------------------------------------------------------------
+#
+#NCDF	= /usr/local
+#GX	= /ptmp/yinjj/hycom.gx1v3.302
+#POP	= ./POP
+#R4I4	= /usr/local/lib64/r4i4
+NCDF	= /u/home/wallcraf/netcdf-3.5.0
+GX	= ../../hycom.gx1v3.302
+POP	= ../../hycom.gx1v3.302/POP
+R4I4	= ${GX}/lib64/r4i4
+
+
+#
+# ---------------------------------------------------------------------
+# common definitions for IBM SMP Power4, MPI, real*8.
+# ---------------------------------------------------------------------
+#
+# MACROS      DESCRIPTIONS:
+#
+# FC:         Fortran 90 compiler.
+# FCFFLAGS:   Fortran 90 compilation flags.
+# CC:         C compiler.
+# CCFLAGS:    C compilation flags.
+# CPP:        cpp preprocessor (may be implied by FC).
+# CPPFLAGS:   cpp -D macro flags.
+# LD:         Loader.
+# LDFLAGS:    Loader flags.
+# EXTRALIBS:  Extra local libraries (if any).
+#
+FC            =	mpxlf95_r
+FCFFLAGS      =	-qfixed=132 -O3 -qstrict -qarch=pwr4 -qtune=pwr4 -qcache=auto -qspillsize=32000 -qrealsize=8 -qintsize=4 -q64 -qwarn64 -I${GX}/lib/include -I. -I/usr/lpp/ppe.poe/include/thread64 -I${GX}/lib/include -I${R4I4} -I${NCDF}/include
+
+CC            =	mpcc_r
+CCFLAGS       =	-q64
+CPP           =	/usr/lib/cpp -P
+CPPFLAGS      =	-DUSE_CCSM3 -DAIX -DREAL8 -DMPI -DSERIAL_IO -DTIMER
+LD            =	$(FC)
+LDFLAGS       =	$(FCFFLAGS) -b64
+EXTRALIBS     = ${POP}/*.o \
+                -L${R4I4} \
+                -L${NCDF}/lib -lnetcdf \
+                -l mass -l massv \
+                -L${GX}/lib -lesmf -lmct -lmpeu -lmph
+#
+# --- generic make definitions
+#
+SHELL         = /bin/sh
+RM            = \rm -f
+
+#
+# rules.
+#
+
+.c.o:
+	$(CC) $(CPPFLAGS) $(CCFLAGS)  -c $*.c
+
+.F.o:
+	$(RM) $<.f
+	$(CPP) $(CPPFLAGS) $< | sed -e '/^ *$$/d' > $<.f
+	$(FC) $(FCFFLAGS) -c $<.f
+	-\mv $<.o $*.o
+	$(RM) $<.f
+
+default: hycom
+
+MODS =   ccsm3_constants.o \
+         mod_dimensions.o \
+         ccsm3.o \
+         ccsm3_exit.o \
+         ccsm3_global_reductions.o \
+         ccsm3_io.o \
+         mod_xc.o \
+         mod_za.o \
+         mod_pipe.o \
+         ccsm3_grid.o \
+         ccsm3_time_management.o \
+         ccsm3_forcing.o \
+         mod_incupd.o \
+         mod_floats.o \
+         mod_tides.o \
+         mod_mean.o \
+         mod_hycom.o
+
+OBJS =	archiv.o barotp.o  bigrid.o blkdat.o  cnuity.o convec.o \
+	diapfl.o dpthuv.o  dpudpv.o forfun.o  geopar.o hybgen.o \
+	icloan.o inicon.o inigiss.o inikpp.o  inimy.o  latbdy.o \
+	matinv.o momtum.o  mxkprf.o  mxkrt.o  mxkrtm.o  mxpwp.o \
+	overtn.o poflat.o  prtmsk.o  psmoo.o restart.o \
+	trcupd.o  tsadvc.o  \
+       machine.o  wtime.o machi_c.o  isnan.o \
+	thermf_c.o
+
+hycom:	$(MODS) $(OBJS) hycom.o
+	$(LD)  $(LDFLAGS) -o hycom  hycom.o $(MODS) $(OBJS) $(EXTRALIBS)
+
+hycom.o:   hycom.F  mod_hycom.o
+archiv.o:  archiv.F  mod_xc.o common_blocks.h            mod_za.o
+barotp.o:  barotp.F  mod_xc.o common_blocks.h                     mod_pipe.o \
+	                                                          mod_tides.o
+bigrid.o:  bigrid.F  mod_xc.o 
+blkdat.o:  blkdat.F  mod_xc.o common_blocks.h stmt_fns.h          mod_incupd.o \
+	                                                          mod_floats.o \
+	                                                          mod_tides.o
+cnuity.o:  cnuity.F  mod_xc.o common_blocks.h                     mod_pipe.o
+convec.o:  convec.F  mod_xc.o common_blocks.h stmt_fns.h
+diapfl.o:  diapfl.F  mod_xc.o common_blocks.h stmt_fns.h
+dpthuv.o:  dpthuv.F  mod_xc.o common_blocks.h
+dpudpv.o:  dpudpv.F  mod_xc.o 
+forfun.o:  forfun.F  mod_xc.o common_blocks.h            mod_za.o
+geopar.o:  geopar.F  mod_xc.o common_blocks.h stmt_fns.h mod_za.o
+hybgen.o:  hybgen.F  mod_xc.o common_blocks.h stmt_fns.h          mod_pipe.o
+icloan.o:  icloan.F  mod_xc.o common_blocks.h stmt_fns.h
+inicon.o:  inicon.F  mod_xc.o common_blocks.h stmt_fns.h          mod_pipe.o
+inigiss.o: inigiss.F mod_xc.o common_blocks.h stmt_fns.h
+inikpp.o:  inikpp.F  mod_xc.o common_blocks.h stmt_fns.h
+inimy.o:   inimy.F   mod_xc.o common_blocks.h stmt_fns.h
+isnan.o:   isnan.F
+latbdy.o:  latbdy.F  mod_xc.o common_blocks.h                     mod_tides.o
+machine.o: machine.F
+machi_c.o: machi_c.c
+matinv.o:  matinv.F  mod_xc.o common_blocks.h
+momtum.o:  momtum.F  mod_xc.o common_blocks.h stmt_fns.h          mod_pipe.o \
+	                                                          mod_tides.o
+mxkprf.o:  mxkprf.F  mod_xc.o common_blocks.h stmt_fns.h          mod_pipe.o
+mxkrt.o:   mxkrt.F   mod_xc.o common_blocks.h stmt_fns.h
+mxkrtm.o:  mxkrtm.F  mod_xc.o common_blocks.h stmt_fns.h
+mxpwp.o:   mxpwp.F   mod_xc.o common_blocks.h stmt_fns.h
+overtn.o:  overtn.F  mod_xc.o common_blocks.h
+poflat.o:  poflat.F
+prtmsk.o:  prtmsk.F
+psmoo.o:   psmoo.F   mod_xc.o 
+restart.o: restart.F mod_xc.o common_blocks.h            mod_za.o mod_tides.o
+trcupd.o:  trcupd.F  mod_xc.o common_blocks.h                     mod_pipe.o
+tsadvc.o:  tsadvc.F  mod_xc.o common_blocks.h stmt_fns.h          mod_pipe.o
+wtime.o:   wtime.F
+
+thermf_c.o:  thermf_c.F  mod_xc.o common_blocks.h stmt_fns.h
+
+mod_hycom.o: \
+        mod_hycom.F  mod_xc.o common_blocks.h            mod_za.o mod_pipe.o \
+                                                                  mod_incupd.o \
+                                                                  mod_mean.o \
+                                                                  mod_floats.o
+mod_incupd.o: \
+        mod_incupd.F mod_xc.o common_blocks.h            mod_za.o
+mod_floats.o: \
+        mod_floats.F mod_xc.o common_blocks.h            mod_za.o mod_pipe.o
+mod_pipe.o: \
+        mod_pipe.F   mod_xc.o common_blocks.h
+mod_tides.o: \
+        mod_tides.F  mod_xc.o common_blocks.h            mod_za.o
+mod_mean.o: \
+        mod_mean.F   mod_xc.o common_blocks.h            mod_za.o
+
+mod_dimensions.o:   mod_dimensions.F dimensions.h
+mod_xc.o: mod_xc.F  mod_dimensions.o mod_xc_sm.h mod_xc_mp.h
+mod_za.o: mod_za.F  mod_xc.o         mod_za_sm.h mod_za_mp.h mod_za_mp1.h mod_za_zt.h
